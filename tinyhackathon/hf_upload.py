@@ -10,7 +10,7 @@ from huggingface_hub import HfApi, login
 from rich.console import Console
 from rich.table import Table
 
-app = typer.Typer()
+app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
 
 
