@@ -1,0 +1,47 @@
+[project]
+name = "TinyHackathon"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12, <3.13"
+dependencies = [
+    "numpy>=2.2.4",
+    "rich>=13.9.4",
+    "typer>=0.15.2",
+]
+
+[project.optional-dependencies]
+flash = ["flash-attn>=2.7.4", "einops>=0.8.0"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "torch>=2.5.1,<2.7",
+    "setuptools>=75.8.0",
+    "exllamav2>=0.2.8",
+    "huggingface-hub>=0.29.3",
+    "ruff>=0.11.1",
+]
+
+
+[tool.uv]
+package = true
+no-build-isolation-package = ["flash-attn"]
+
+[[tool.uv.dependency-metadata]]
+name = "flash-attn"
+version = "2.7.4post1"
+requires-dist = ["torch", "einops"]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-gpu"}]
+exllamav2 = { url = "https://github.com/turboderp-org/exllamav2/releases/download/v0.2.8/exllamav2-0.2.8+cu124.torch2.6.0-cp312-cp312-linux_x86_64.whl" }
+
+[[tool.uv.index]]
+name = "pytorch-gpu"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+
+[tool.ruff]
+line-length = 140
