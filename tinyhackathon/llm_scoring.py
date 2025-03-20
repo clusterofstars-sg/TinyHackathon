@@ -28,7 +28,15 @@ def load_submissions(submissions_dir: Union[str, Path]) -> List[Path]:
     return files
 
 
-def process_submission(pq_file: Path, generator: ExLlamaV2DynamicGenerator, scores: Dict[str, Any], output_file: Path):
+def process_submission(
+    pq_file: Path,
+    generator: ExLlamaV2DynamicGenerator,
+    scores: Dict[str, Any],
+    output_file: Path,
+    temperature: float = 0.1,
+    top_p: float = 0.9,
+    max_new_tokens: int = 20,
+):
     "Process a single submission file and evaluate its completions."
     file_path = str(pq_file)
     username = pq_file.parent.name
@@ -46,11 +54,18 @@ def process_submission(pq_file: Path, generator: ExLlamaV2DynamicGenerator, scor
     if username not in scores:
         scores[username] = {}
     scores[username][submission_id] = {"score": 0, "details": []}
-    scores = eval_completions(completions, generator, username, submission_id, scores, output_file)
+    scores = eval_completions(completions, generator, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens)
     return scores
 
 
-def evaluate_submissions(model_dir: str, output_file: str = "scores.json", submissions_dir: str = "downloaded_submissions"):
+def evaluate_submissions(
+    model_dir: str,
+    output_file: str = "scores.json",
+    submissions_dir: str = "downloaded_submissions",
+    temperature: float = 0.1,
+    top_p: float = 0.9,
+    max_new_tokens: int = 20,
+):
     "Evaluate all submissions using ExLlama2."
     parquet_files = load_submissions(submissions_dir)
     console.print(f"[yellow]Loading model from {model_dir}...[/yellow]")
@@ -66,7 +81,7 @@ def evaluate_submissions(model_dir: str, output_file: str = "scores.json", submi
         scores = json.loads(output_file.read_text())
 
     for pq_file in parquet_files:
-        scores = process_submission(pq_file, generator, scores, output_file)
+        scores = process_submission(pq_file, generator, scores, output_file, temperature, top_p, max_new_tokens)
 
     leaderboard = []
     for username, user_submissions in scores.items():
@@ -83,11 +98,14 @@ def eval_completions(
     submission_id: str,
     scores: Dict[str, Dict[str, Dict[str, Any]]],
     output_file: Path,
+    temperature: float = 0.1,
+    top_p: float = 0.9,
+    max_new_tokens: int = 20,
 ):
     "Evaluate each completion in a submission."
     for i, completion in enumerate(completions):
         prompt = f"Rate the quality of this story completion on a scale of 1-10: {completion}"
-        response = generator.generate(prompt, temperature=0.1, top_p=0.9, max_new_tokens=20)
+        response = generator.generate(prompt, temperature=temperature, top_p=top_p, max_new_tokens=max_new_tokens)
         item_score = 5
         try:
             score_match = re.search(r"(\d+)", response)
@@ -110,10 +128,13 @@ def evaluate(
     model_dir: Annotated[str, typer.Argument(help="Directory containing the ExLlama2 model files")],
     output_file: Annotated[str, typer.Option(help="Path to save scores JSON")] = "scores.json",
     submissions_dir: Annotated[str, typer.Option(help="Directory containing submission files")] = "downloaded_submissions",
+    temperature: Annotated[float, typer.Option(help="Temperature for generation sampling. 1.0 means greedy sampling with exllamav2")] = 1.0,
+    top_p: Annotated[float, typer.Option(help="Top-p (nucleus) sampling value")] = 0.9,
+    max_new_tokens: Annotated[int, typer.Option(help="Maximum number of tokens to generate")] = 20,
 ):
     "Evaluate submissions using ExLlama2 and display a leaderboard."
     try:
-        scores, leaderboard = evaluate_submissions(model_dir, output_file, submissions_dir)
+        scores, leaderboard = evaluate_submissions(model_dir, output_file, submissions_dir, temperature, top_p, max_new_tokens)
 
         # Display leaderboard
         console.print("[green]Evaluation complete! Leaderboard:[/green]")
