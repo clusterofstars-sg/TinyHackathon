@@ -127,11 +127,11 @@ def eval_completions(
         stop_conditions = []
         for i in range(10):
             # Add stop conditions for each digit 1-10 with period/space
-            stop_conditions.append(tokenizer.encode(f"{i + 1}.", encode_special_tokens=False))
-            stop_conditions.append(tokenizer.encode(f"{i + 1} ", encode_special_tokens=False))
+            stop_conditions.append(f"{i + 1}.")
+            stop_conditions.append(f"{i + 1} ")
         # Add general stops for newline after digits
-        stop_conditions.append(tokenizer.encode("\n", encode_special_tokens=False))
-
+        stop_conditions.append("\n")
+        
         # Queue all jobs
         console.print(f"[yellow]Queueing {len(completions)} evaluation jobs...[/yellow]")
 
@@ -190,10 +190,11 @@ def eval_completions(
 
                         if not result["eos"]:
                             # For non-EOS results, collect partial text
-                            if idx not in responses:
-                                responses[idx] = result["text"]
-                            else:
-                                responses[idx] += result["text"]
+                            if "text" in result:
+                                if idx not in responses:
+                                    responses[idx] = result["text"]
+                                else:
+                                    responses[idx] += result["text"]
                             continue
 
                         # For EOS results, get the full completion
