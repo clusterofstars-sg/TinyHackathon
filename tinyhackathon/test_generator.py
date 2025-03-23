@@ -1,6 +1,7 @@
 import pandas as pd
 import typer
 from rich.console import Console
+from typing import Annotated
 
 # Initialize Typer app and console
 app = typer.Typer()

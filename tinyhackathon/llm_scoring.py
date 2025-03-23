@@ -1,10 +1,9 @@
 import json
-import os
 import re
 import time
 import traceback
 from pathlib import Path
-from typing import Annotated, Dict, List, Optional, Tuple, Any, Union
+from typing import Annotated, Dict, List, Any, Union
 
 import pandas as pd
 import typer
@@ -69,7 +68,6 @@ def process_submission(
     max_new_tokens: int = 20,
 ):
     "Process a single submission file and evaluate its completions."
-    file_path = str(pq_file)
     username = pq_file.parent.name
     submission_id = pq_file.stem
 
@@ -165,10 +163,6 @@ def eval_completions(
     try:
         # Create sampler settings
         gen_settings = ExLlamaV2Sampler.Settings(temperature=temperature, top_p=top_p, token_repetition_penalty=1.0, top_k=0)
-
-        # Create stop conditions to end generation when we get a number
-        tokenizer = generator.tokenizer
-
         # Queue all jobs
         console.print(f"[yellow]Queueing {len(completions)} evaluation jobs...[/yellow]")
 
