@@ -22,6 +22,7 @@ dev = [
     "huggingface-hub>=0.29.3",
     "ruff>=0.11.1",
     "tokenizers>=0.21.1",
+    "datasets>=3.4.1",
 ]
 
 
@@ -43,6 +44,8 @@ name = "pytorch-gpu"
 url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
-
 [tool.ruff]
 line-length = 140
+
+[tool.setuptools]
+packages = ["tinyhackathon"]
