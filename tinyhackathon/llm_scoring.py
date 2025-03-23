@@ -31,6 +31,33 @@ def load_submissions(submissions_dir: Union[str, Path]) -> List[Path]:
     return files
 
 
+def create_evaluation_prompt(story_start: str, completion: str):
+    "Create a structured prompt for evaluating story completions"
+    return f"""You are an expert judge of children's stories. Please evaluate the following story completion based on the given beginning.
+
+STORY BEGINNING:
+{story_start}
+
+COMPLETION:
+{completion}
+
+Evaluate this completion on the following criteria, rating each on a scale of 1-10:
+
+1. Grammar: Is the text grammatically correct and well-structured?
+2. Creativity: Is the completion original, imaginative, and engaging?
+3. Consistency: Does the completion maintain consistency with the story beginning?
+4. Plot: Does the completion provide a satisfying and logical continuation of the story?
+
+Provide your scores in the following format:
+GRAMMAR: [score]
+CREATIVITY: [score]
+CONSISTENCY: [score]
+PLOT: [score]
+OVERALL: [average of the four scores]
+
+Keep your evaluation concise and focused on the scoring format.
+"""
+
 def process_submission(
     pq_file: Path,
     generator: ExLlamaV2DynamicGenerator,
@@ -62,7 +89,7 @@ def process_submission(
         if submission_id not in scores[username]:
             scores[username][submission_id] = {"score": 0, "details": []}
 
-        scores = eval_completions(completions, generator, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens)
+        scores = eval_completions(completions, generator, test_dataset, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens)
         console.print(
             f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id]['score']:.2f}[/green]"
         )
@@ -109,10 +136,23 @@ def evaluate_submissions(
     leaderboard.sort(key=lambda x: x["score"], reverse=True)
     return scores, leaderboard
 
+def extract_scores(response):
+    "Extract scores from the model's response"
+    scores = {}
+    # Extract individual category scores
+    for category in ['GRAMMAR', 'CREATIVITY', 'CONSISTENCY', 'PLOT', 'OVERALL']:
+        pattern = f"{category}: (\\d+)"
+        match = re.search(pattern, response, re.IGNORECASE)
+        if match:
+            scores[category.lower()] = int(match.group(1))
+        else:
+            scores[category.lower()] = 5  # Default if not found
+    return scores
 
 def eval_completions(
     completions: List[str],
     generator: ExLlamaV2DynamicGenerator,
+    test_dataset: Dataset,
     username: str,
     submission_id: str,
     scores: Dict[str, Dict[str, Dict[str, Any]]],
@@ -139,8 +179,8 @@ def eval_completions(
 
         # Queue all evaluation jobs
         responses = {}
-        for i, completion in enumerate(completions):
-            prompt = f"Rate the quality of this story completion on a scale of 1-10: {completion}"
+        for i, (completion,test_text) in enumerate(zip(completions,test_dataset['test']['text'])):
+            prompt = create_evaluation_prompt(completion,test_text)
             prompt_ids = generator.tokenizer.encode(prompt, encode_special_tokens=True)
             job = ExLlamaV2DynamicJob(
                 input_ids=prompt_ids,
@@ -229,7 +269,7 @@ def eval_completions(
             # Extract score
             item_score = 5  # Default score
             try:
-                score_match = re.search(r"(\d+)", response)
+                score_match = extract_scores(response)['OVERALL']
                 if score_match:
                     item_score = min(10, max(1, int(score_match.group(1))))
             except Exception as e:
