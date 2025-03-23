@@ -15,6 +15,7 @@ from rich.table import Table
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
 from hf_upload import get_hf_user
+from datasets import load_dataset, Dataset
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
@@ -33,6 +34,7 @@ def load_submissions(submissions_dir: Union[str, Path]) -> List[Path]:
 def process_submission(
     pq_file: Path,
     generator: ExLlamaV2DynamicGenerator,
+    test_dataset: Dataset, 
     scores: Dict[str, Any],
     output_file: Path,
     temperature: float = 0.1,
@@ -73,6 +75,7 @@ def process_submission(
 
 def evaluate_submissions(
     model_dir: str,
+    test_file: str,
     output_file: str = "scores.json",
     submissions_dir: str = "downloaded_submissions",
     temperature: float = 0.1,
@@ -86,6 +89,7 @@ def evaluate_submissions(
     console.print(f"[yellow]Loading model from {model_dir}...[/yellow]")
     config = ExLlamaV2Config(model_dir)
     model = ExLlamaV2(config)
+    test_data = load_dataset("parquet",data_files={'test': test_file})
     cache = ExLlamaV2Cache(model, max_seq_len=cache_size, lazy=True)
     model.load_autosplit(cache)
     tokenizer = ExLlamaV2Tokenizer(config)
@@ -96,7 +100,7 @@ def evaluate_submissions(
         scores = json.loads(output_file.read_text())
 
     for pq_file in parquet_files:
-        scores = process_submission(pq_file, generator, scores, output_file, temperature, top_p, max_new_tokens)
+        scores = process_submission(pq_file, generator, test_data, scores, output_file, temperature, top_p, max_new_tokens)
 
     leaderboard = []
     for username, user_submissions in scores.items():
@@ -254,6 +258,7 @@ def eval_completions(
 @app.command()
 def evaluate(
     model_dir: Annotated[str, typer.Argument(help="Directory containing the ExLlama2 model files")],
+    test_file: Annotated[str, typer.Argument(help="Directory containing the Tiny Stories test data")],
     output_file: Annotated[str, typer.Option(help="Path to save scores JSON")] = "scores.json",
     submissions_dir: Annotated[str, typer.Option(help="Directory containing submission files")] = "downloaded_submissions",
     temperature: Annotated[float, typer.Option(help="Temperature for generation sampling")] = 1.0,
@@ -267,6 +272,7 @@ def evaluate(
         console.print(f"[yellow]Starting evaluation with batch_size={batch_size}, cache_size={cache_size}[/yellow]")
         scores, leaderboard = evaluate_submissions(
             model_dir=model_dir,
+            test_file=test_file,
             output_file=output_file,
             submissions_dir=submissions_dir,
             temperature=temperature,
