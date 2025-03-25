@@ -108,7 +108,6 @@ def evaluate_submissions(
     max_new_tokens: int = 20,
     batch_size: int = 128,
     cache_size: int = 1024 * 50,
-    sample: int = 1000,
 ):
     "Evaluate all submissions using ExLlama2."
     parquet_files = load_submissions(submissions_dir)
@@ -174,7 +173,7 @@ def eval_completions(
 
         # Queue all evaluation jobs
         responses = {}
-        for i, (completion,test_text) in enumerate(zip(completions,test_dataset['test']['text'])):
+        for i, (completion,test_text) in enumerate(zip(completions,test_dataset['test']['text'].sample(1000))):
             prompt = create_evaluation_prompt(completion,test_text)
             prompt_ids = generator.tokenizer.encode(prompt, encode_special_tokens=True)
             job = ExLlamaV2DynamicJob(
