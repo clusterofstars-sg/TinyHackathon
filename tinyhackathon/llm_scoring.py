@@ -1,20 +1,19 @@
 import json
-import os
 import re
 import time
 import traceback
 from pathlib import Path
-from typing import Annotated, Dict, List, Optional, Tuple, Any, Union
+from typing import Annotated, Dict, List, Any, Union, Optional
 
 import pandas as pd
 import typer
+from datasets import Dataset, load_dataset
 from exllamav2 import ExLlamaV2, ExLlamaV2Cache, ExLlamaV2Config, ExLlamaV2Tokenizer
 from exllamav2.generator import ExLlamaV2DynamicGenerator, ExLlamaV2DynamicJob, ExLlamaV2Sampler
-from rich.console import Console
-from rich.table import Table
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
-
 from hf_upload import get_hf_user
+from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.table import Table
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
@@ -30,17 +29,46 @@ def load_submissions(submissions_dir: Union[str, Path]) -> List[Path]:
     return files
 
 
+def create_evaluation_prompt(story_start: str, completion: str):
+    "Create a structured prompt for evaluating story completions"
+    return f"""You are an expert judge of children's stories. Please evaluate the following story completion based on the given beginning.
+
+STORY BEGINNING:
+{story_start}
+
+COMPLETION:
+{completion}
+
+Evaluate this completion on the following criteria, rating each on a scale of 1-10:
+
+1. Grammar: Is the text grammatically correct and well-structured?
+2. Creativity: Is the completion original, imaginative, and engaging?
+3. Consistency: Does the completion maintain consistency with the story beginning?
+4. Plot: Does the completion provide a satisfying and logical continuation of the story?
+
+Provide your scores in the following format:
+GRAMMAR: [score]
+CREATIVITY: [score]
+CONSISTENCY: [score]
+PLOT: [score]
+OVERALL: [average of the four scores]
+
+Keep your evaluation concise and focused on the scoring format. Return only what is specified in the format. 
+"""
+
+
 def process_submission(
     pq_file: Path,
     generator: ExLlamaV2DynamicGenerator,
+    test_dataset: Dataset,
     scores: Dict[str, Any],
     output_file: Path,
     temperature: float = 0.1,
     top_p: float = 0.9,
     max_new_tokens: int = 20,
+    sample: Optional[int] = None
 ):
     "Process a single submission file and evaluate its completions."
-    file_path = str(pq_file)
     username = pq_file.parent.name
     submission_id = pq_file.stem
 
@@ -60,10 +88,9 @@ def process_submission(
         if submission_id not in scores[username]:
             scores[username][submission_id] = {"score": 0, "details": []}
 
-        scores = eval_completions(completions, generator, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens)
-        console.print(
-            f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id]['score']:.2f}[/green]"
-        )
+        scores = eval_completions(completions, generator, test_dataset, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens, sample = sample)  # fmt: skip
+        console.print(f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id]['score']:.2f}[/green]")  # fmt: skip
+
     except Exception as e:
         console.print(f"[red]Error processing {username}/{submission_id}: {str(e)}[/red]")
         traceback.print_exc()
@@ -73,6 +100,7 @@ def process_submission(
 
 def evaluate_submissions(
     model_dir: str,
+    test_file: str,
     output_file: str = "scores.json",
     submissions_dir: str = "downloaded_submissions",
     temperature: float = 0.1,
@@ -80,12 +108,14 @@ def evaluate_submissions(
     max_new_tokens: int = 20,
     batch_size: int = 128,
     cache_size: int = 1024 * 50,
+    sample: Optional[int] = None,
 ):
     "Evaluate all submissions using ExLlama2."
     parquet_files = load_submissions(submissions_dir)
     console.print(f"[yellow]Loading model from {model_dir}...[/yellow]")
     config = ExLlamaV2Config(model_dir)
     model = ExLlamaV2(config)
+    test_data = load_dataset("parquet", data_files={"test": test_file})
     cache = ExLlamaV2Cache(model, max_seq_len=cache_size, lazy=True)
     model.load_autosplit(cache)
     tokenizer = ExLlamaV2Tokenizer(config)
@@ -96,7 +126,7 @@ def evaluate_submissions(
         scores = json.loads(output_file.read_text())
 
     for pq_file in parquet_files:
-        scores = process_submission(pq_file, generator, scores, output_file, temperature, top_p, max_new_tokens)
+        scores = process_submission(pq_file, generator, test_data, scores, output_file, temperature, top_p, max_new_tokens, sample=sample)
 
     leaderboard = []
     for username, user_submissions in scores.items():
@@ -106,9 +136,24 @@ def evaluate_submissions(
     return scores, leaderboard
 
 
+def extract_scores(response):
+    "Extract scores from the model's response"
+    scores = {}
+    # Extract individual category scores
+    for category in ["GRAMMAR", "CREATIVITY", "CONSISTENCY", "PLOT", "OVERALL"]:
+        pattern = f"{category}: (\\d+)"
+        match = re.search(pattern, response, re.IGNORECASE)
+        if match:
+            scores[category.lower()] = int(match.group(1))
+        else:
+            scores[category.lower()] = 5  # Default if not found
+    return scores
+
+
 def eval_completions(
     completions: List[str],
     generator: ExLlamaV2DynamicGenerator,
+    test_dataset: Dataset,
     username: str,
     submission_id: str,
     scores: Dict[str, Dict[str, Dict[str, Any]]],
@@ -116,22 +161,12 @@ def eval_completions(
     temperature: float = 1.0,
     top_p: float = 0.9,
     max_new_tokens: int = 20,
+    sample: Optional[int] = None
 ):
     "Evaluate each completion in a submission using batch processing."
     try:
         # Create sampler settings
         gen_settings = ExLlamaV2Sampler.Settings(temperature=temperature, top_p=top_p, token_repetition_penalty=1.0, top_k=0)
-
-        # Create stop conditions to end generation when we get a number
-        tokenizer = generator.tokenizer
-        stop_conditions = []
-        for i in range(10):
-            # Add stop conditions for each digit 1-10 with period/space
-            stop_conditions.append(tokenizer.encode(f"{i + 1}.", encode_special_tokens=False))
-            stop_conditions.append(tokenizer.encode(f"{i + 1} ", encode_special_tokens=False))
-        # Add general stops for newline after digits
-        stop_conditions.append(tokenizer.encode("\n", encode_special_tokens=False))
-
         # Queue all jobs
         console.print(f"[yellow]Queueing {len(completions)} evaluation jobs...[/yellow]")
 
@@ -142,15 +177,15 @@ def eval_completions(
 
         # Queue all evaluation jobs
         responses = {}
-        for i, completion in enumerate(completions):
-            prompt = f"Rate the quality of this story completion on a scale of 1-10: {completion}"
+
+        for i, (completion,test_text) in enumerate(zip(completions[:sample],test_dataset['test'][:sample]['text'])):
+            prompt = create_evaluation_prompt(completion,test_text)
             prompt_ids = generator.tokenizer.encode(prompt, encode_special_tokens=True)
             job = ExLlamaV2DynamicJob(
                 input_ids=prompt_ids,
                 gen_settings=gen_settings,
                 max_new_tokens=max_new_tokens,
                 identifier=i,
-                stop_conditions=stop_conditions,
             )
             generator.enqueue(job)
             responses[i] = ""  # Initialize empty response
@@ -190,10 +225,11 @@ def eval_completions(
 
                         if not result["eos"]:
                             # For non-EOS results, collect partial text
-                            if idx not in responses:
-                                responses[idx] = result["text"]
-                            else:
-                                responses[idx] += result["text"]
+                            if "text" in result:
+                                if idx not in responses:
+                                    responses[idx] = result["text"]
+                                else:
+                                    responses[idx] += result["text"]
                             continue
 
                         # For EOS results, get the full completion
@@ -232,9 +268,9 @@ def eval_completions(
             # Extract score
             item_score = 5  # Default score
             try:
-                score_match = re.search(r"(\d+)", response)
+                score_match = extract_scores(response)['overall']
                 if score_match:
-                    item_score = min(10, max(1, int(score_match.group(1))))
+                    item_score = min(10, max(1, int(score_match)))
             except Exception as e:
                 console.print(f"[red]Error extracting score from '{response}': {str(e)}[/red]")
 
@@ -261,6 +297,7 @@ def eval_completions(
 @app.command()
 def evaluate(
     model_dir: Annotated[str, typer.Argument(help="Directory containing the ExLlama2 model files")],
+    test_file: Annotated[str, typer.Argument(help="Directory containing the Tiny Stories test data")],
     output_file: Annotated[str, typer.Option(help="Path to save scores JSON")] = "scores.json",
     submissions_dir: Annotated[str, typer.Option(help="Directory containing submission files")] = "downloaded_submissions",
     temperature: Annotated[float, typer.Option(help="Temperature for generation sampling")] = 1.0,
@@ -268,12 +305,14 @@ def evaluate(
     max_new_tokens: Annotated[int, typer.Option(help="Maximum number of tokens to generate")] = 20,
     batch_size: Annotated[int, typer.Option(help="Maximum batch size for inference")] = 128,
     cache_size: Annotated[int, typer.Option(help="Cache size in tokens (multiply by 4 for bytes)")] = 2048,
+    sample: Annotated[int, typer.Option(help="Sample the first N completions and test data")] = None,
 ):
     "Evaluate submissions using ExLlama2 and display a leaderboard."
     try:
         console.print(f"[yellow]Starting evaluation with batch_size={batch_size}, cache_size={cache_size}[/yellow]")
         scores, leaderboard = evaluate_submissions(
             model_dir=model_dir,
+            test_file=test_file,
             output_file=output_file,
             submissions_dir=submissions_dir,
             temperature=temperature,
@@ -281,6 +320,7 @@ def evaluate(
             max_new_tokens=max_new_tokens,
             batch_size=batch_size,
             cache_size=cache_size,
+            sample=sample,
         )
 
         # Display leaderboard
