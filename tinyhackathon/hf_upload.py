@@ -7,6 +7,7 @@ import pandas as pd
 import typer
 from huggingface_hub import HfApi, login
 from rich.console import Console
+from datasets import load_dataset
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
@@ -99,6 +100,37 @@ def whoami():
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
 
+def download_tinystories_dataset(split: str ="validation", output_dir: str ="tinystories_data"):
+    "Download Tiny Stories dataset using hugginface datasets"
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
+    output_file = output_dir/f"{split}.parquet"
+    if output_file.exists():
+        console.print(f"[green]Dataset already downloaded to {output_file}[/green]")
+        return output_file
+    console.print(f"[yellow]Downloading TinyStories {split} split...[/yellow]")
+    dataset = load_dataset("roneneldan/TinyStories", split=split)
+    df = dataset.to_pandas()
+    df.to_parquet(output_file, index=False)
+    console.print(f"[green]Dataset saved to {output_file}[/green]")
+    return output_file
+
+@app.command()
+def download_dataset(split: Annotated[str, typer.Option(help="Split to download, such as train or validation")] = "validation",
+                     output_dir: Annotated[str, typer.Option(help="Directory to output data")] = "tinystories_data"):
+    "Download Tiny Stories dataset from huggingface"
+    try:
+        output_file = download_tinystories_dataset(split, output_dir)
+        console.print(f"[green]Successfully downloaded TinyStories {split} split to {output_file}[/green]")
+        df = pd.read_parquet(output_file)
+        console.print(f"[blue]Dataset has {len(df)} rows and columns: {', '.join(df.columns)}[/blue]")
+
+        console.print("[yellow]Sample story:[/yellow]")
+        sample = df.sample(1).iloc[0]
+        console.print(sample["text"])
+        
+    except Exception as e:
+        console.print(f"[red]Error: {str(e)}[/red]")
 
 if __name__ == "__main__":
     app()

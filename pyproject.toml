@@ -44,6 +44,8 @@ name = "pytorch-gpu"
 url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
-
 [tool.ruff]
 line-length = 140
+
+[tool.setuptools]
+packages = ["tinyhackathon"]
