@@ -1,14 +1,12 @@
-import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Dict, List, Optional, Tuple, Any, Union
+from typing import Annotated, Any, Dict, Optional, Tuple, Union
 
 import pandas as pd
 import typer
 from huggingface_hub import HfApi, login
 from rich.console import Console
-from rich.table import Table
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
@@ -38,17 +36,15 @@ def read_submission(file_path: Union[str, Path]) -> pd.DataFrame:
 
 def get_hf_user() -> Tuple[str, HfApi]:
     "Get HF username from the API."
-    token = os.environ.get("HF_TOKEN")
-    assert token, "Please set the HF_TOKEN environment variable"
-    login(token=token)
     api = HfApi()
     user_info = api.whoami()
-    return user_info["name"], api
+    return user_info, api
 
 
 def upload_submission(file_path: Union[str, Path], dataset_id: str = "cluster-of-stars/TinyStoriesHackathon") -> Dict[str, Any]:
     "Upload a submission to the HF dataset using environment credentials."
-    username, api = get_hf_user()
+    info, api = get_hf_user()
+    username = info["name"]
     # Read submission and convert to parquet
     df = read_submission(file_path)
     # Generate timestamp for the submission
@@ -90,8 +86,16 @@ def submit(file_path: Annotated[str, typer.Argument(help="Path to the submission
 def whoami():
     "Check your Hugging Face identity."
     try:
-        username, _ = get_hf_user()
-        console.print(f"Logged in as: [green]{username}[/green]")
+        info, _ = get_hf_user()
+        role = info.get("auth", {}).get("accessToken", {}).get("role", None)
+        if role is None:
+            console.print(f"[red]Logged in as [blue]{info['name']}[/blue] without read or write access. Please login with write access to submit.[/red]")  # fmt: skip
+        elif role == "read":
+            console.print(f"[red]Logged in as [blue]{info['name']}[/blue] with read-only access. Need to login with write access to submit.[/red]")  # fmt: skip
+        elif role == "write":
+            console.print(f"[green]Logged in as [blue]{info['name']}[/blue] with write access.[/green]")
+        else:
+            raise ValueError(f"Unknown Hugging Face role: {info['name']}")
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
 
