@@ -108,13 +108,14 @@ def evaluate_submissions(
     max_new_tokens: int = 20,
     batch_size: int = 128,
     cache_size: int = 1024 * 50,
+    sample: int = 1000,
 ):
     "Evaluate all submissions using ExLlama2."
     parquet_files = load_submissions(submissions_dir)
     console.print(f"[yellow]Loading model from {model_dir}...[/yellow]")
     config = ExLlamaV2Config(model_dir)
     model = ExLlamaV2(config)
-    test_data = load_dataset("parquet",data_files={'test': test_file})
+    test_data = load_dataset("parquet",data_files={'test': test_file}).sample(1000)
     cache = ExLlamaV2Cache(model, max_seq_len=cache_size, lazy=True)
     model.load_autosplit(cache)
     tokenizer = ExLlamaV2Tokenizer(config)
