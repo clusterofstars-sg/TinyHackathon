@@ -1,14 +1,12 @@
-import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Dict, List, Optional, Tuple, Any, Union
+from typing import Annotated, Any, Dict, Optional, Tuple, Union
 
 import pandas as pd
 import typer
 from huggingface_hub import HfApi, login
 from rich.console import Console
-from rich.table import Table
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()

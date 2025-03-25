@@ -3,18 +3,17 @@ import re
 import time
 import traceback
 from pathlib import Path
-from typing import Annotated, Dict, List, Any, Union
+from typing import Annotated, Any, Dict, List, Union
 
 import pandas as pd
 import typer
+from datasets import Dataset, load_dataset
 from exllamav2 import ExLlamaV2, ExLlamaV2Cache, ExLlamaV2Config, ExLlamaV2Tokenizer
 from exllamav2.generator import ExLlamaV2DynamicGenerator, ExLlamaV2DynamicJob, ExLlamaV2Sampler
-from rich.console import Console
-from rich.table import Table
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
-
 from hf_upload import get_hf_user
-from datasets import load_dataset, Dataset
+from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.table import Table
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
@@ -57,10 +56,11 @@ OVERALL: [average of the four scores]
 Keep your evaluation concise and focused on the scoring format.
 """
 
+
 def process_submission(
     pq_file: Path,
     generator: ExLlamaV2DynamicGenerator,
-    test_dataset: Dataset, 
+    test_dataset: Dataset,
     scores: Dict[str, Any],
     output_file: Path,
     temperature: float = 0.1,
@@ -87,10 +87,8 @@ def process_submission(
         if submission_id not in scores[username]:
             scores[username][submission_id] = {"score": 0, "details": []}
 
-        scores = eval_completions(completions, generator, test_dataset, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens)
-        console.print(
-            f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id]['score']:.2f}[/green]"
-        )
+        scores = eval_completions(completions, generator, test_dataset, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens)  # fmt: skip
+        console.print(f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id]['score']:.2f}[/green]")  # fmt: skip
     except Exception as e:
         console.print(f"[red]Error processing {username}/{submission_id}: {str(e)}[/red]")
         traceback.print_exc()
@@ -114,7 +112,7 @@ def evaluate_submissions(
     console.print(f"[yellow]Loading model from {model_dir}...[/yellow]")
     config = ExLlamaV2Config(model_dir)
     model = ExLlamaV2(config)
-    test_data = load_dataset("parquet",data_files={'test': test_file})
+    test_data = load_dataset("parquet", data_files={"test": test_file})
     cache = ExLlamaV2Cache(model, max_seq_len=cache_size, lazy=True)
     model.load_autosplit(cache)
     tokenizer = ExLlamaV2Tokenizer(config)
@@ -134,11 +132,12 @@ def evaluate_submissions(
     leaderboard.sort(key=lambda x: x["score"], reverse=True)
     return scores, leaderboard
 
+
 def extract_scores(response):
     "Extract scores from the model's response"
     scores = {}
     # Extract individual category scores
-    for category in ['GRAMMAR', 'CREATIVITY', 'CONSISTENCY', 'PLOT', 'OVERALL']:
+    for category in ["GRAMMAR", "CREATIVITY", "CONSISTENCY", "PLOT", "OVERALL"]:
         pattern = f"{category}: (\\d+)"
         match = re.search(pattern, response, re.IGNORECASE)
         if match:
@@ -146,6 +145,7 @@ def extract_scores(response):
         else:
             scores[category.lower()] = 5  # Default if not found
     return scores
+
 
 def eval_completions(
     completions: List[str],
@@ -173,8 +173,8 @@ def eval_completions(
 
         # Queue all evaluation jobs
         responses = {}
-        for i, (completion,test_text) in enumerate(zip(completions,test_dataset['test']['text'])):
-            prompt = create_evaluation_prompt(completion,test_text)
+        for i, (completion, test_text) in enumerate(zip(completions, test_dataset["test"]["text"])):
+            prompt = create_evaluation_prompt(completion, test_text)
             prompt_ids = generator.tokenizer.encode(prompt, encode_special_tokens=True)
             job = ExLlamaV2DynamicJob(
                 input_ids=prompt_ids,
@@ -263,7 +263,7 @@ def eval_completions(
             # Extract score
             item_score = 5  # Default score
             try:
-                score_match = extract_scores(response)['OVERALL']
+                score_match = extract_scores(response)["OVERALL"]
                 if score_match:
                     item_score = min(10, max(1, int(score_match.group(1))))
             except Exception as e:
