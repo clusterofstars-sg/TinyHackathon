@@ -100,11 +100,12 @@ def whoami():
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
 
-def download_tinystories_dataset(split: str ="validation", output_dir: str ="tinystories_data"):
+
+def download_tinystories_dataset(split: str = "validation", output_dir: str = "tinystories_data"):
     "Download Tiny Stories dataset using hugginface datasets"
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True, parents=True)
-    output_file = output_dir/f"{split}.parquet"
+    output_file = output_dir / f"{split}.parquet"
     if output_file.exists():
         console.print(f"[green]Dataset already downloaded to {output_file}[/green]")
         return output_file
@@ -115,9 +116,12 @@ def download_tinystories_dataset(split: str ="validation", output_dir: str ="tin
     console.print(f"[green]Dataset saved to {output_file}[/green]")
     return output_file
 
+
 @app.command()
-def download_dataset(split: Annotated[str, typer.Option(help="Split to download, such as train or validation")] = "validation",
-                     output_dir: Annotated[str, typer.Option(help="Directory to output data")] = "tinystories_data"):
+def download_dataset(
+    split: Annotated[str, typer.Option(help="Split to download, such as train or validation")] = "validation",
+    output_dir: Annotated[str, typer.Option(help="Directory to output data")] = "tinystories_data",
+):
     "Download Tiny Stories dataset from huggingface"
     try:
         output_file = download_tinystories_dataset(split, output_dir)
@@ -128,9 +132,10 @@ def download_dataset(split: Annotated[str, typer.Option(help="Split to download,
         console.print("[yellow]Sample story:[/yellow]")
         sample = df.sample(1).iloc[0]
         console.print(sample["text"])
-        
+
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
+
 
 if __name__ == "__main__":
     app()
