@@ -1,14 +1,13 @@
-import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Dict, List, Optional, Tuple, Any, Union
+from typing import Annotated, Any, Dict, Optional, Tuple, Union
 
 import pandas as pd
 import typer
 from huggingface_hub import HfApi, login
 from rich.console import Console
-from rich.table import Table
+from datasets import load_dataset
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
@@ -38,17 +37,15 @@ def read_submission(file_path: Union[str, Path]) -> pd.DataFrame:
 
 def get_hf_user() -> Tuple[str, HfApi]:
     "Get HF username from the API."
-    token = os.environ.get("HF_TOKEN")
-    assert token, "Please set the HF_TOKEN environment variable"
-    login(token=token)
     api = HfApi()
     user_info = api.whoami()
-    return user_info["name"], api
+    return user_info, api
 
 
 def upload_submission(file_path: Union[str, Path], dataset_id: str = "cluster-of-stars/TinyStoriesHackathon") -> Dict[str, Any]:
     "Upload a submission to the HF dataset using environment credentials."
-    username, api = get_hf_user()
+    info, api = get_hf_user()
+    username = info["name"]
     # Read submission and convert to parquet
     df = read_submission(file_path)
     # Generate timestamp for the submission
@@ -90,11 +87,50 @@ def submit(file_path: Annotated[str, typer.Argument(help="Path to the submission
 def whoami():
     "Check your Hugging Face identity."
     try:
-        username, _ = get_hf_user()
-        console.print(f"Logged in as: [green]{username}[/green]")
+        info, _ = get_hf_user()
+        role = info.get("auth", {}).get("accessToken", {}).get("role", None)
+        if role is None:
+            console.print(f"[red]Logged in as [blue]{info['name']}[/blue] without read or write access. Please login with write access to submit.[/red]")  # fmt: skip
+        elif role == "read":
+            console.print(f"[red]Logged in as [blue]{info['name']}[/blue] with read-only access. Need to login with write access to submit.[/red]")  # fmt: skip
+        elif role == "write":
+            console.print(f"[green]Logged in as [blue]{info['name']}[/blue] with write access.[/green]")
+        else:
+            raise ValueError(f"Unknown Hugging Face role: {info['name']}")
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
 
+def download_tinystories_dataset(split: str ="validation", output_dir: str ="tinystories_data"):
+    "Download Tiny Stories dataset using hugginface datasets"
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
+    output_file = output_dir/f"{split}.parquet"
+    if output_file.exists():
+        console.print(f"[green]Dataset already downloaded to {output_file}[/green]")
+        return output_file
+    console.print(f"[yellow]Downloading TinyStories {split} split...[/yellow]")
+    dataset = load_dataset("roneneldan/TinyStories", split=split)
+    df = dataset.to_pandas()
+    df.to_parquet(output_file, index=False)
+    console.print(f"[green]Dataset saved to {output_file}[/green]")
+    return output_file
+
+@app.command()
+def download_dataset(split: Annotated[str, typer.Option(help="Split to download, such as train or validation")] = "validation",
+                     output_dir: Annotated[str, typer.Option(help="Directory to output data")] = "tinystories_data"):
+    "Download Tiny Stories dataset from huggingface"
+    try:
+        output_file = download_tinystories_dataset(split, output_dir)
+        console.print(f"[green]Successfully downloaded TinyStories {split} split to {output_file}[/green]")
+        df = pd.read_parquet(output_file)
+        console.print(f"[blue]Dataset has {len(df)} rows and columns: {', '.join(df.columns)}[/blue]")
+
+        console.print("[yellow]Sample story:[/yellow]")
+        sample = df.sample(1).iloc[0]
+        console.print(sample["text"])
+        
+    except Exception as e:
+        console.print(f"[red]Error: {str(e)}[/red]")
 
 if __name__ == "__main__":
     app()
