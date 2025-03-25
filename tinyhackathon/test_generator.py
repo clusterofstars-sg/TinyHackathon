@@ -1,12 +1,14 @@
 import pandas as pd
 import typer
 from rich.console import Console
-from typing import Annotated
+from typing import Annotated, Optional
 
 # Initialize Typer app and console
 app = typer.Typer()
 console = Console()
-def create_sample_submission(output_file: str ="sample_submission.csv", dataset_file: str ="valid.parquet"):
+def create_sample_submission(output_file: str = "sample_submission.csv",
+                             dataset_file: str = "valid.parquet",
+                             sample: Optional[int] = None):
     "Create a sample submission from TinyStories validation data"
     dataset_file = dataset_file
     
@@ -15,7 +17,7 @@ def create_sample_submission(output_file: str ="sample_submission.csv", dataset_
     
     # Extract last 50% of each story as "completion"
     completions = []
-    for text in df["text"][:1000]:
+    for text in df["text"][:sample]:
         completions.append(text[:-len(text)//10]) #remove last 10% so not perfect
     
     # Create submission dataframe
@@ -27,10 +29,11 @@ def create_sample_submission(output_file: str ="sample_submission.csv", dataset_
     return submission_df
 @app.command()
 def create_submission_sample(output_file: Annotated[str, typer.Option(help="Please to put test submission")] = "sample_submission.csv",
-                             dataset_file: Annotated[str, typer.Option(help="Location of test data")] = 'valid.parquet'):
+                             dataset_file: Annotated[str, typer.Option(help="Location of test data")] = 'valid.parquet',
+                             sample: Annotated[Optional[int], typer.Option(help="Starting from beginning sample this many examples")]= None,):
     "Create a sample submission file from TinyStories test data"
     try:
-        df = create_sample_submission(output_file, dataset_file)
+        df = create_sample_submission(output_file, dataset_file, sample=sample)
         console.print(f"[green]Created sample submission with {len(df)} entries[/green]")
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")

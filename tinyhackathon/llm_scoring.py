@@ -3,7 +3,7 @@ import re
 import time
 import traceback
 from pathlib import Path
-from typing import Annotated, Dict, List, Any, Union
+from typing import Annotated, Dict, List, Any, Union, Optional
 
 import pandas as pd
 import typer
@@ -54,7 +54,7 @@ CONSISTENCY: [score]
 PLOT: [score]
 OVERALL: [average of the four scores]
 
-Keep your evaluation concise and focused on the scoring format.
+Keep your evaluation concise and focused on the scoring format. Return only what is specified in the format. 
 """
 
 def process_submission(
@@ -66,6 +66,7 @@ def process_submission(
     temperature: float = 0.1,
     top_p: float = 0.9,
     max_new_tokens: int = 20,
+    sample: Optional[int] = None
 ):
     "Process a single submission file and evaluate its completions."
     username = pq_file.parent.name
@@ -87,7 +88,7 @@ def process_submission(
         if submission_id not in scores[username]:
             scores[username][submission_id] = {"score": 0, "details": []}
 
-        scores = eval_completions(completions, generator, test_dataset, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens)
+        scores = eval_completions(completions, generator, test_dataset, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens, sample=sample)
         console.print(
             f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id]['score']:.2f}[/green]"
         )
@@ -108,13 +109,14 @@ def evaluate_submissions(
     max_new_tokens: int = 20,
     batch_size: int = 128,
     cache_size: int = 1024 * 50,
+    sample: Optional[int] = None,
 ):
     "Evaluate all submissions using ExLlama2."
     parquet_files = load_submissions(submissions_dir)
     console.print(f"[yellow]Loading model from {model_dir}...[/yellow]")
     config = ExLlamaV2Config(model_dir)
     model = ExLlamaV2(config)
-    test_data = load_dataset("parquet",data_files={'test': test_file}).sample(1000)
+    test_data = load_dataset("parquet",data_files={'test': test_file})
     cache = ExLlamaV2Cache(model, max_seq_len=cache_size, lazy=True)
     model.load_autosplit(cache)
     tokenizer = ExLlamaV2Tokenizer(config)
@@ -125,7 +127,7 @@ def evaluate_submissions(
         scores = json.loads(output_file.read_text())
 
     for pq_file in parquet_files:
-        scores = process_submission(pq_file, generator, test_data, scores, output_file, temperature, top_p, max_new_tokens)
+        scores = process_submission(pq_file, generator, test_data, scores, output_file, temperature, top_p, max_new_tokens, sample=sample)
 
     leaderboard = []
     for username, user_submissions in scores.items():
@@ -158,6 +160,7 @@ def eval_completions(
     temperature: float = 1.0,
     top_p: float = 0.9,
     max_new_tokens: int = 20,
+    sample: Optional[int] = None
 ):
     "Evaluate each completion in a submission using batch processing."
     try:
@@ -173,7 +176,7 @@ def eval_completions(
 
         # Queue all evaluation jobs
         responses = {}
-        for i, (completion,test_text) in enumerate(zip(completions,test_dataset['test']['text'].sample(1000))):
+        for i, (completion,test_text) in enumerate(zip(completions[:sample],test_dataset['test'][:sample]['text'])):
             prompt = create_evaluation_prompt(completion,test_text)
             prompt_ids = generator.tokenizer.encode(prompt, encode_special_tokens=True)
             job = ExLlamaV2DynamicJob(
@@ -263,9 +266,9 @@ def eval_completions(
             # Extract score
             item_score = 5  # Default score
             try:
-                score_match = extract_scores(response)['OVERALL']
+                score_match = extract_scores(response)['overall']
                 if score_match:
-                    item_score = min(10, max(1, int(score_match.group(1))))
+                    item_score = min(10, max(1, int(score_match)))
             except Exception as e:
                 console.print(f"[red]Error extracting score from '{response}': {str(e)}[/red]")
 
@@ -300,6 +303,7 @@ def evaluate(
     max_new_tokens: Annotated[int, typer.Option(help="Maximum number of tokens to generate")] = 20,
     batch_size: Annotated[int, typer.Option(help="Maximum batch size for inference")] = 128,
     cache_size: Annotated[int, typer.Option(help="Cache size in tokens (multiply by 4 for bytes)")] = 2048,
+    sample: Annotated[int, typer.Option(help="Sample the first N completions and test data")] = None,
 ):
     "Evaluate submissions using ExLlama2 and display a leaderboard."
     try:
@@ -314,6 +318,7 @@ def evaluate(
             max_new_tokens=max_new_tokens,
             batch_size=batch_size,
             cache_size=cache_size,
+            sample=sample,
         )
 
         # Display leaderboard
