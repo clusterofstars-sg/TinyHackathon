@@ -15,7 +15,7 @@ def create_sample_submission(output_file: str ="sample_submission.csv", dataset_
     
     # Extract last 50% of each story as "completion"
     completions = []
-    for text in df["text"]:
+    for text in df["text"][:1000]:
         completions.append(text[:-len(text)//10]) #remove last 10% so not perfect
     
     # Create submission dataframe
