@@ -40,7 +40,7 @@ def create_submission_sample(
 ):
     "Create a sample submission file from TinyStories test data"
     try:
-        df = create_sample_submission(output_file, dataset_file, sample=sample)
+        df = create_sample_submission(output_file, dataset_file)
         console.print(f"[green]Created sample submission with {len(df)} entries[/green]")
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
