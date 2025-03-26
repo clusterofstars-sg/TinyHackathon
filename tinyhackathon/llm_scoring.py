@@ -215,6 +215,7 @@ def eval_completions(
                 input_ids=prompt_ids,
                 gen_settings=gen_settings,
                 max_new_tokens=max_new_tokens,
+                stop_conditions=[generator.tokenizer.eos_token_id],
                 identifier=i,
             )
             generator.enqueue(job)
@@ -258,11 +259,7 @@ def eval_completions(
 
                         # For EOS results, get the full completion
                         responses[idx] = result["full_completion"]
-                        metadata[idx] = {
-                            k: v.item() if isinstance(v, torch.Tensor) else v
-                            for k, v in result.items()
-                            if k not in ["full_completion", "job"]
-                        }
+                        metadata[idx] = result
                         num_completions += 1
 
                         # Update progress
@@ -326,7 +323,11 @@ def eval_completions(
                         "prompt": prompts_log.get(idx, ""),
                         "response": response,
                         "score": item_score,
-                        "metadata": metadata.get(idx, {}),
+                        "metadata": {
+                            k: v.item() if isinstance(v, torch.Tensor) else v
+                            for k, v in metadata.get(idx, {}).items()
+                            if k not in ["full_completion", "job", "held"]
+                        },
                     }
                 )
 
