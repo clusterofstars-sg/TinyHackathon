@@ -14,6 +14,7 @@ from hf_upload import get_hf_user
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
+import transformers
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
@@ -31,14 +32,7 @@ def load_submissions(submissions_dir: Union[str, Path]) -> List[Path]:
 
 def create_evaluation_prompt(story_start: str, completion: str):
     "Create a structured prompt for evaluating story completions"
-    return f"""You are an expert judge of children's stories. Please evaluate the following story completion based on the given beginning.
-
-STORY BEGINNING:
-{story_start}
-
-COMPLETION:
-{completion}
-
+    system_prompt = """You are an expert judge of children's stories. Please evaluate the user's story  completion based on the given beginning and their completion. 
 Evaluate this completion on the following criteria, rating each on a scale of 1-10:
 
 1. Grammar: Is the text grammatically correct and well-structured?
@@ -53,8 +47,20 @@ CONSISTENCY: [score]
 PLOT: [score]
 OVERALL: [average of the four scores]
 
-Keep your evaluation concise and focused on the scoring format. Return only what is specified in the format. 
-"""
+Keep your evaluation concise and focused on the scoring format. Return only what is specified in the format."""
+    user_prompt = f"""STORY BEGINNING:
+{story_start}
+
+COMPLETION:
+{completion}"""
+    messages = [
+        {
+            "role": "system",
+            "content": system_prompt,
+        },
+        {"role": "user", "content": user_prompt},
+    ]
+    return messages
 
 
 def process_submission(
@@ -66,7 +72,7 @@ def process_submission(
     temperature: float = 0.1,
     top_p: float = 0.9,
     max_new_tokens: int = 20,
-    sample: Optional[int] = None
+    sample: Optional[int] = None,
 ):
     "Process a single submission file and evaluate its completions."
     username = pq_file.parent.name
@@ -119,6 +125,8 @@ def evaluate_submissions(
     cache = ExLlamaV2Cache(model, max_seq_len=cache_size, lazy=True)
     model.load_autosplit(cache)
     tokenizer = ExLlamaV2Tokenizer(config)
+    hf_tokenizer = transformers.AutoTokenizer.from_pretrained(model_dir)
+    tokenizer.apply_chat_template = hf_tokenizer.apply_chat_template
     generator = ExLlamaV2DynamicGenerator(model=model, cache=cache, tokenizer=tokenizer, max_batch_size=batch_size, max_q_size=1)
     output_file = Path(output_file)
     scores: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -161,7 +169,7 @@ def eval_completions(
     temperature: float = 1.0,
     top_p: float = 0.9,
     max_new_tokens: int = 20,
-    sample: Optional[int] = None
+    sample: Optional[int] = None,
 ):
     "Evaluate each completion in a submission using batch processing."
     try:
@@ -178,9 +186,10 @@ def eval_completions(
         # Queue all evaluation jobs
         responses = {}
 
-        for i, (completion,test_text) in enumerate(zip(completions[:sample],test_dataset['test'][:sample]['text'])):
-            prompt = create_evaluation_prompt(completion,test_text)
-            prompt_ids = generator.tokenizer.encode(prompt, encode_special_tokens=True)
+        for i, (completion, test_text) in enumerate(zip(completions[:sample], test_dataset["test"][:sample]["text"])):
+            prompt = create_evaluation_prompt(completion, test_text)
+            templated_prompt = generator.tokenizer.apply_chat_template(prompt, add_generation_prompt=True, tokenize=False)
+            prompt_ids = generator.tokenizer.encode(templated_prompt, encode_special_tokens=True)
             job = ExLlamaV2DynamicJob(
                 input_ids=prompt_ids,
                 gen_settings=gen_settings,
@@ -268,7 +277,7 @@ def eval_completions(
             # Extract score
             item_score = 5  # Default score
             try:
-                score_match = extract_scores(response)['overall']
+                score_match = extract_scores(response)["overall"]
                 if score_match:
                     item_score = min(10, max(1, int(score_match)))
             except Exception as e:
