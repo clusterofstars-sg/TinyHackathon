@@ -159,9 +159,12 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# wandb logs
-wandb/
+# project
 data/
 models/
-
+logs/
 tinystories_data/
+submissions/
+downloaded_submissions/
+tiny_stories/
+scores.json
