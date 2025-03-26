@@ -5,6 +5,7 @@ import traceback
 from pathlib import Path
 from typing import Annotated, Dict, List, Any, Union, Optional
 import datetime
+import yaml
 
 import pandas as pd
 import torch
@@ -32,34 +33,30 @@ def load_submissions(submissions_dir: Union[str, Path]) -> List[Path]:
     return files
 
 
-def create_evaluation_prompt(story_start: str, completion: str):
-    "Create a structured prompt for evaluating story completions"
-    system_prompt = """You are an expert judge of children's stories. Please evaluate the user's story  completion based on the given beginning and their completion.
-Evaluate this completion on the following criteria, rating each on a scale of 1-10:
+def create_evaluation_prompt(story_start: str, completion: str, prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml"):
+    "Create a structured prompt for evaluating story completions from a YAML file"
+    prompt_file = Path(prompt_file) if not isinstance(prompt_file, Path) else prompt_file
 
-1. Grammar: Is the text grammatically correct and well-structured?
-2. Creativity: Is the completion original, imaginative, and engaging?
-3. Consistency: Does the completion maintain consistency with the story beginning?
-4. Plot: Does the completion provide a satisfying and logical continuation of the story?
+    if not prompt_file.exists():
+        console.print(f"[red]Prompt file {prompt_file} not found, using default prompts[/red]")
+        typer.exit(1)
+    else:
+        # Load prompts from YAML file
+        try:
+            with open(prompt_file, "r") as f:
+                prompts = yaml.safe_load(f)
 
-Provide your scores in the following format:
-GRAMMAR: [score]
-CREATIVITY: [score]
-CONSISTENCY: [score]
-PLOT: [score]
-OVERALL: [average of the four scores]
+            system_prompt = prompts.get("system_prompt", "")
+            user_prompt = prompts.get("user_prompt", "")
+        except Exception as e:
+            console.print(f"[red]Error loading prompts from {prompt_file}: {str(e)}[/red]")
+            raise
 
-Keep your evaluation concise and focused on the scoring format. Return only what is specified in the format."""
-    user_prompt = f"""STORY BEGINNING:
-{story_start}
+    # Format the user prompt with provided values
+    user_prompt = user_prompt.format(story_start=story_start, completion=completion)
 
-COMPLETION:
-{completion}"""
     messages = [
-        {
-            "role": "system",
-            "content": system_prompt,
-        },
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
     return messages
@@ -76,6 +73,7 @@ def process_submission(
     max_new_tokens: int = 20,
     sample: Optional[int] = None,
     log_prompts: bool = False,
+    prompt_file: Union[str, Path] = "prompts.yaml",
 ):
     "Process a single submission file and evaluate its completions."
     username = pq_file.parent.name
@@ -105,7 +103,7 @@ def process_submission(
             log_file = log_dir / f"{submission_id}.json"
             console.print(f"[yellow]Will log prompts and responses to {log_file}[/yellow]")
 
-        scores = eval_completions(completions, generator, test_dataset, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens, sample=sample, log_file=log_file)  # fmt: skip
+        scores = eval_completions(completions, generator, test_dataset, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens, sample=sample, log_file=log_file, prompt_file=prompt_file)  # fmt: skip
         console.print(f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id]['score']:.2f}[/green]")  # fmt: skip
 
     except Exception as e:
@@ -127,6 +125,7 @@ def evaluate_submissions(
     cache_size: int = 1024 * 50,
     sample: Optional[int] = None,
     log_prompts: bool = False,
+    prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml",
 ):
     "Evaluate all submissions using ExLlama2."
     parquet_files = load_submissions(submissions_dir)
@@ -139,7 +138,8 @@ def evaluate_submissions(
     tokenizer = ExLlamaV2Tokenizer(config)
     hf_tokenizer = transformers.AutoTokenizer.from_pretrained(model_dir)
     tokenizer.apply_chat_template = hf_tokenizer.apply_chat_template
-    generator = ExLlamaV2DynamicGenerator(model=model, cache=cache, tokenizer=tokenizer, max_batch_size=batch_size, max_q_size=1)
+    generator = ExLlamaV2DynamicGenerator(model=model, cache=cache, tokenizer=tokenizer, max_batch_size=batch_size)
+    generator.warmup()
     output_file = Path(output_file)
     scores: Dict[str, Dict[str, Dict[str, Any]]] = {}
     if output_file.exists():
@@ -147,7 +147,17 @@ def evaluate_submissions(
 
     for pq_file in parquet_files:
         scores = process_submission(
-            pq_file, generator, test_data, scores, output_file, temperature, top_p, max_new_tokens, sample=sample, log_prompts=log_prompts
+            pq_file,
+            generator,
+            test_data,
+            scores,
+            output_file,
+            temperature,
+            top_p,
+            max_new_tokens,
+            sample=sample,
+            log_prompts=log_prompts,
+            prompt_file=prompt_file,
         )
 
     leaderboard = []
@@ -185,6 +195,7 @@ def eval_completions(
     max_new_tokens: int = 20,
     sample: Optional[int] = None,
     log_file: Optional[Path] = None,
+    prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml",
 ):
     "Evaluate each completion in a submission using batch processing."
     try:
@@ -204,7 +215,7 @@ def eval_completions(
         prompts_log = {}
 
         for i, (completion, test_text) in enumerate(zip(completions[:sample], test_dataset["test"][:sample]["text"])):
-            prompt = create_evaluation_prompt(story_start=test_text, completion=completion)
+            prompt = create_evaluation_prompt(story_start=test_text, completion=completion, prompt_file=prompt_file)
             templated_prompt = generator.tokenizer.apply_chat_template(prompt, add_generation_prompt=True, tokenize=False)
 
             # Store prompt for logging
@@ -377,6 +388,7 @@ def evaluate(
     cache_size: Annotated[int, typer.Option(help="Cache size in tokens (multiply by 4 for bytes)")] = 2048,
     sample: Annotated[int, typer.Option(help="Sample the first N completions and test data")] = None,
     log_prompts: Annotated[bool, typer.Option(help="Enable prompt and response logging")] = False,
+    prompt_file: Annotated[str, typer.Option(help="Path to YAML file with evaluation prompts")] = "prompts/simple_prompt.yaml",
 ):
     "Evaluate submissions using ExLlama2 and display a leaderboard."
     try:
@@ -393,6 +405,7 @@ def evaluate(
             cache_size=cache_size,
             sample=sample,
             log_prompts=log_prompts,
+            prompt_file=prompt_file,
         )
 
         # Display leaderboard
@@ -409,7 +422,7 @@ def evaluate(
         console.print(table)
         console.print(f"[blue]Full results saved to {output_file}[/blue]")
         if log_prompts:
-            console.print(f"[blue]Prompt and response logs saved to logs/[username]/[submission_id].json[/blue]")
+            console.print("[blue]Prompt and response logs saved to logs/[username]/[submission_id].json[/blue]")
 
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
