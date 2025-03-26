@@ -4,8 +4,10 @@ import time
 import traceback
 from pathlib import Path
 from typing import Annotated, Dict, List, Any, Union, Optional
+import datetime
 
 import pandas as pd
+import torch
 import typer
 from datasets import Dataset, load_dataset
 from exllamav2 import ExLlamaV2, ExLlamaV2Cache, ExLlamaV2Config, ExLlamaV2Tokenizer
@@ -32,7 +34,7 @@ def load_submissions(submissions_dir: Union[str, Path]) -> List[Path]:
 
 def create_evaluation_prompt(story_start: str, completion: str):
     "Create a structured prompt for evaluating story completions"
-    system_prompt = """You are an expert judge of children's stories. Please evaluate the user's story  completion based on the given beginning and their completion. 
+    system_prompt = """You are an expert judge of children's stories. Please evaluate the user's story  completion based on the given beginning and their completion.
 Evaluate this completion on the following criteria, rating each on a scale of 1-10:
 
 1. Grammar: Is the text grammatically correct and well-structured?
@@ -73,6 +75,7 @@ def process_submission(
     top_p: float = 0.9,
     max_new_tokens: int = 20,
     sample: Optional[int] = None,
+    log_prompts: bool = False,
 ):
     "Process a single submission file and evaluate its completions."
     username = pq_file.parent.name
@@ -94,7 +97,15 @@ def process_submission(
         if submission_id not in scores[username]:
             scores[username][submission_id] = {"score": 0, "details": []}
 
-        scores = eval_completions(completions, generator, test_dataset, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens, sample = sample)  # fmt: skip
+        # Create log file path if logging is enabled
+        log_file = None
+        if log_prompts:
+            log_dir = Path("logs") / username
+            log_dir.mkdir(exist_ok=True, parents=True)
+            log_file = log_dir / f"{submission_id}.json"
+            console.print(f"[yellow]Will log prompts and responses to {log_file}[/yellow]")
+
+        scores = eval_completions(completions, generator, test_dataset, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens, sample=sample, log_file=log_file)  # fmt: skip
         console.print(f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id]['score']:.2f}[/green]")  # fmt: skip
 
     except Exception as e:
@@ -115,6 +126,7 @@ def evaluate_submissions(
     batch_size: int = 128,
     cache_size: int = 1024 * 50,
     sample: Optional[int] = None,
+    log_prompts: bool = False,
 ):
     "Evaluate all submissions using ExLlama2."
     parquet_files = load_submissions(submissions_dir)
@@ -134,7 +146,9 @@ def evaluate_submissions(
         scores = json.loads(output_file.read_text())
 
     for pq_file in parquet_files:
-        scores = process_submission(pq_file, generator, test_data, scores, output_file, temperature, top_p, max_new_tokens, sample=sample)
+        scores = process_submission(
+            pq_file, generator, test_data, scores, output_file, temperature, top_p, max_new_tokens, sample=sample, log_prompts=log_prompts
+        )
 
     leaderboard = []
     for username, user_submissions in scores.items():
@@ -170,6 +184,7 @@ def eval_completions(
     top_p: float = 0.9,
     max_new_tokens: int = 20,
     sample: Optional[int] = None,
+    log_file: Optional[Path] = None,
 ):
     "Evaluate each completion in a submission using batch processing."
     try:
@@ -185,10 +200,16 @@ def eval_completions(
 
         # Queue all evaluation jobs
         responses = {}
+        metadata = {}
+        prompts_log = {}
 
         for i, (completion, test_text) in enumerate(zip(completions[:sample], test_dataset["test"][:sample]["text"])):
-            prompt = create_evaluation_prompt(completion, test_text)
+            prompt = create_evaluation_prompt(story_start=test_text, completion=completion)
             templated_prompt = generator.tokenizer.apply_chat_template(prompt, add_generation_prompt=True, tokenize=False)
+
+            # Store prompt for logging
+            prompts_log[i] = templated_prompt
+
             prompt_ids = generator.tokenizer.encode(templated_prompt, encode_special_tokens=True)
             job = ExLlamaV2DynamicJob(
                 input_ids=prompt_ids,
@@ -233,16 +254,15 @@ def eval_completions(
                         idx = result["identifier"]
 
                         if not result["eos"]:
-                            # For non-EOS results, collect partial text
-                            if "text" in result:
-                                if idx not in responses:
-                                    responses[idx] = result["text"]
-                                else:
-                                    responses[idx] += result["text"]
                             continue
 
                         # For EOS results, get the full completion
                         responses[idx] = result["full_completion"]
+                        metadata[idx] = {
+                            k: v.item() if isinstance(v, torch.Tensor) else v
+                            for k, v in result.items()
+                            if k not in ["full_completion", "job"]
+                        }
                         num_completions += 1
 
                         # Update progress
@@ -272,6 +292,15 @@ def eval_completions(
         total_score = 0
         processed_count = 0
 
+        # Log prompts and responses if log_file is provided
+        if log_file:
+            log_data = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "username": username,
+                "submission_id": submission_id,
+                "evaluations": [],
+            }
+
         # Process each response
         for idx, response in responses.items():
             # Extract score
@@ -288,6 +317,37 @@ def eval_completions(
             scores[username][submission_id]["details"].append(details_item)
             total_score += item_score
             processed_count += 1
+
+            # Add to log if enabled
+            if log_file:
+                log_data["evaluations"].append(
+                    {
+                        "item_id": idx,
+                        "prompt": prompts_log.get(idx, ""),
+                        "response": response,
+                        "score": item_score,
+                        "metadata": metadata.get(idx, {}),
+                    }
+                )
+
+        # Save logs if enabled
+        if log_file and processed_count > 0:
+            # Ensure log directory exists
+            log_file.parent.mkdir(exist_ok=True, parents=True)
+
+            # Append to existing log if it exists
+            existing_logs = []
+            if log_file.exists():
+                try:
+                    existing_logs = json.loads(log_file.read_text())
+                    if not isinstance(existing_logs, list):
+                        existing_logs = [existing_logs]
+                except:
+                    existing_logs = []
+
+            existing_logs.append(log_data)
+            log_file.write_text(json.dumps(existing_logs, indent=2))
+            console.print(f"[green]Saved prompt and response logs to {log_file}[/green]")
 
         # Final update
         if processed_count > 0:
@@ -315,6 +375,7 @@ def evaluate(
     batch_size: Annotated[int, typer.Option(help="Maximum batch size for inference")] = 128,
     cache_size: Annotated[int, typer.Option(help="Cache size in tokens (multiply by 4 for bytes)")] = 2048,
     sample: Annotated[int, typer.Option(help="Sample the first N completions and test data")] = None,
+    log_prompts: Annotated[bool, typer.Option(help="Enable prompt and response logging")] = False,
 ):
     "Evaluate submissions using ExLlama2 and display a leaderboard."
     try:
@@ -330,6 +391,7 @@ def evaluate(
             batch_size=batch_size,
             cache_size=cache_size,
             sample=sample,
+            log_prompts=log_prompts,
         )
 
         # Display leaderboard
@@ -345,6 +407,8 @@ def evaluate(
 
         console.print(table)
         console.print(f"[blue]Full results saved to {output_file}[/blue]")
+        if log_prompts:
+            console.print(f"[blue]Prompt and response logs saved to logs/[username]/[submission_id].json[/blue]")
 
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
