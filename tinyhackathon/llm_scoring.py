@@ -456,7 +456,7 @@ def download_new_submissions(
 
     # Get all files in the dataset that match our pattern
     files = api.list_repo_files(repo_id=dataset_id, repo_type="dataset")
-    submission_files = [f for f in files if f.startswith("submissions/") and f.endswith(".parquet")]
+    submission_files = [f for f in files if f.startswith("submissions/") and f.endswith(".csv")]
 
     # Download new submissions
     new_files = []
