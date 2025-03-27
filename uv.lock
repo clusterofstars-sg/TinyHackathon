@@ -951,6 +951,7 @@ dev = [
     { name = "setuptools" },
     { name = "tokenizers" },
     { name = "torch" },
+    { name = "transformers" },
 ]
 
 [package.metadata]
@@ -973,6 +974,7 @@ dev = [
     { name = "setuptools", specifier = ">=75.8.0" },
     { name = "tokenizers", specifier = ">=0.21.1" },
     { name = "torch", specifier = ">=2.5.1,<2.7", index = "https://download.pytorch.org/whl/cu124" },
+    { name = "transformers", specifier = ">=4.50.1" },
 ]
 
 [[package]]
@@ -1042,6 +1044,27 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a8/4b/29b4ef32e036bb34e4ab51796dd745cdba7ed47ad142a9f4a1eb8e0c744d/tqdm-4.67.1.tar.gz", hash = "sha256:f8aef9c52c08c13a65f30ea34f4e5aac3fd1a34959879d7e59e63027286627f2", size = 169737 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d0/30/dc54f88dd4a2b5dc8a0279bdd7270e735851848b762aeb1c1184ed1f6b14/tqdm-4.67.1-py3-none-any.whl", hash = "sha256:26445eca388f82e72884e0d580d5464cd801a3ea01e63e5601bdff9ba6a48de2", size = 78540 },
+]
+
+[[package]]
+name = "transformers"
+version = "4.50.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "filelock" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "pyyaml" },
+    { name = "regex" },
+    { name = "requests" },
+    { name = "safetensors" },
+    { name = "tokenizers" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/40/bd/6043691a6790bbe7bbb0c7ef67697edb97313dc878eab51c958a99c83767/transformers-4.50.1.tar.gz", hash = "sha256:6ee542d2cce7e1b6a06ae350599c27ddf2e6e45ec9d0cb42915b37fca3d6399a", size = 8769599 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/95/c9/a628fbff00c5fb542aa09c0cc66d86568dcc10e64be73005732f8988963b/transformers-4.50.1-py3-none-any.whl", hash = "sha256:e9b9bd274518150528c1d745c7ebba72d27e4e52f2deffaa1fddebad6912da5d", size = 10179942 },
 ]
 
 [[package]]
