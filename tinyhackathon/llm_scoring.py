@@ -1,16 +1,17 @@
-from enum import Enum
+import datetime
 import json
 import re
 import time
 import traceback
+from enum import Enum
 from pathlib import Path
-from typing import Annotated, Dict, List, Any, Union, Optional
-import datetime
-import yaml
+from typing import Annotated, Any, Dict, List, Optional, Union
 
 import pandas as pd
 import torch
+import transformers
 import typer
+import yaml
 from datasets import Dataset, load_dataset
 from exllamav2 import ExLlamaV2, ExLlamaV2Cache, ExLlamaV2Config, ExLlamaV2Tokenizer
 from exllamav2.generator import ExLlamaV2DynamicGenerator, ExLlamaV2DynamicJob, ExLlamaV2Sampler
@@ -18,7 +19,6 @@ from hf_upload import get_hf_user
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
-import transformers
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
@@ -72,9 +72,8 @@ def create_evaluation_prompt(story_start: str, completion: str, prompt_file: Uni
 
 
 def process_submission(
-    pq_file: Path,
+    submission_file: Path,
     generator: ExLlamaV2DynamicGenerator,
-    test_dataset: Dataset,
     scores: Dict[str, Any],
     output_file: Path,
     temperature: float = 0.1,
@@ -85,8 +84,8 @@ def process_submission(
     prompt_file: Union[str, Path] = "prompts.yaml",
 ):
     "Process a single submission file and evaluate its completions."
-    username = pq_file.parent.name
-    submission_id = pq_file.stem
+    username = submission_file.parent.name
+    submission_id = submission_file.stem
 
     if username in scores and submission_id in scores[username]:
         console.print(f"[blue]Skipping already evaluated submission: {username}/{submission_id}[/blue]")
@@ -95,7 +94,8 @@ def process_submission(
     console.print(f"[yellow]Evaluating submission: {username}/{submission_id}[/yellow]")
 
     try:
-        df = pd.read_csv(pq_file)
+        df = pd.read_csv(submission_file)
+        prompts = df["prompt"].tolist()
         completions = df["completion"].tolist()
 
         if username not in scores:
@@ -112,7 +112,7 @@ def process_submission(
             log_file = log_dir / f"{submission_id}.json"
             console.print(f"[yellow]Will log prompts and responses to {log_file}[/yellow]")
 
-        scores = eval_completions(completions, generator, test_dataset, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens, sample=sample, log_file=log_file, prompt_file=prompt_file)  # fmt: skip
+        scores = eval_completions(prompts, completions, generator, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens, sample=sample, log_file=log_file, prompt_file=prompt_file)  # fmt: skip
         console.print(f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id]['score']:.2f}[/green]")  # fmt: skip
 
     except Exception as e:
@@ -124,7 +124,6 @@ def process_submission(
 
 def evaluate_submissions(
     model_dir: str,
-    test_file: str,
     output_file: str = "scores.json",
     submissions_dir: str = "downloaded_submissions",
     temperature: float = 0.1,
@@ -137,11 +136,10 @@ def evaluate_submissions(
     prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml",
 ):
     "Evaluate all submissions using ExLlama2."
-    parquet_files = load_submissions(submissions_dir)
+    submission_files = load_submissions(submissions_dir)
     console.print(f"[yellow]Loading model from {model_dir}...[/yellow]")
     config = ExLlamaV2Config(model_dir)
     model = ExLlamaV2(config)
-    test_data = load_dataset("parquet", data_files={"test": test_file})
     cache = ExLlamaV2Cache(model, max_seq_len=cache_size, lazy=True)
     model.load_autosplit(cache)
     tokenizer = ExLlamaV2Tokenizer(config)
@@ -154,11 +152,10 @@ def evaluate_submissions(
     if output_file.exists():
         scores = json.loads(output_file.read_text())
 
-    for pq_file in parquet_files:
+    for submission_file in submission_files:
         scores = process_submission(
-            pq_file,
+            submission_file,
             generator,
-            test_data,
             scores,
             output_file,
             temperature,
@@ -191,9 +188,9 @@ def extract_scores(response):
 
 
 def eval_completions(
+    prompts: List[str],
     completions: List[str],
     generator: ExLlamaV2DynamicGenerator,
-    test_dataset: Dataset,
     username: str,
     submission_id: str,
     scores: Dict[str, Dict[str, Dict[str, Any]]],
@@ -222,9 +219,9 @@ def eval_completions(
         metadata = {}
         prompts_log = {}
 
-        for i, (completion, test_text) in enumerate(zip(completions[:sample], test_dataset["test"][:sample]["text"])):
-            prompt = create_evaluation_prompt(story_start=test_text, completion=completion, prompt_file=prompt_file)
-            templated_prompt = generator.tokenizer.apply_chat_template(prompt, add_generation_prompt=True, tokenize=False)
+        for i, (beginning, completion) in enumerate(zip(prompts, completions)):
+            raw_prompt = create_evaluation_prompt(story_start=beginning, completion=completion, prompt_file=prompt_file)
+            templated_prompt = generator.tokenizer.apply_chat_template(raw_prompt, add_generation_prompt=True, tokenize=False)
 
             # Store prompt for logging
             prompts_log[i] = templated_prompt
@@ -385,7 +382,6 @@ def eval_completions(
 @app.command()
 def evaluate(
     model_dir: Annotated[str, typer.Argument(help="Directory containing the ExLlama2 model files")],
-    test_file: Annotated[str, typer.Argument(help="Directory containing the Tiny Stories test data")],
     output_file: Annotated[str, typer.Option(help="Path to save scores JSON")] = "scores.json",
     submissions_dir: Annotated[str, typer.Option(help="Directory containing submission files")] = "downloaded_submissions",
     temperature: Annotated[float, typer.Option(help="Temperature for generation sampling")] = 1.0,
@@ -402,7 +398,6 @@ def evaluate(
         console.print(f"[yellow]Starting evaluation with batch_size={batch_size}, cache_size={cache_size}[/yellow]")
         scores, leaderboard = evaluate_submissions(
             model_dir=model_dir,
-            test_file=test_file,
             output_file=output_file,
             submissions_dir=submissions_dir,
             temperature=temperature,
