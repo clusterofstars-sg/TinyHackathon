@@ -1,13 +1,16 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Dict, Optional, Tuple, Union
+from typing import Annotated, Any, Dict, Optional, List, Tuple, Union
 
 import pandas as pd
 import typer
 from huggingface_hub import HfApi, login
 from rich.console import Console
 from datasets import load_dataset
+import csv
+import yaml
+import requests
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
@@ -132,6 +135,40 @@ def download_dataset(
         console.print("[yellow]Sample story:[/yellow]")
         sample = df.sample(1).iloc[0]
         console.print(sample["text"])
+
+    except Exception as e:
+        console.print(f"[red]Error: {str(e)}[/red]")
+
+
+def download_yaml():
+    url = "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/Evaluation%20prompts.yaml"
+    response = requests.get(url)
+    if response.status_code != 200:
+        console.print(f"[red]Error: Failed to download {response.status_code}[/red]")
+    return yaml.safe_load(response.content)
+
+
+def write_csv(csv_file: str, data: list[str], repeat: int = 4):
+    with open(csv_file, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["text"])
+        for row in data:
+            for _ in range(repeat):  # repeat each row 4 times.
+                writer.writerow([row])
+
+
+@app.command()
+def download_eval(
+    output_file: Annotated[str, typer.Option(help="File to output test prompts")] = "evaluation_prompts.csv",
+):
+    "Download Tiny Stories test data from huggingface"
+    try:
+        yaml = download_yaml()
+        write_csv(output_file, yaml)
+
+        console.print("[yellow]Sample eval:[/yellow]")
+        sample = yaml[0]
+        console.print(sample)
 
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
