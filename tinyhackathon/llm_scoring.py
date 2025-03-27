@@ -1,3 +1,4 @@
+from enum import Enum
 import json
 import re
 import time
@@ -23,12 +24,20 @@ app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pret
 console = Console()
 
 
+class ScoreCategory(str, Enum):
+    GRAMMAR = "GRAMMAR"
+    CREATIVITY = "CREATIVITY"
+    CONSISTENCY = "CONSISTENCY"
+    PLOT = "PLOT"
+    OVERALL = "OVERALL"
+
+
 def load_submissions(submissions_dir: Union[str, Path]) -> List[Path]:
     "Load submission files from the specified directory."
     submissions_dir = Path(submissions_dir)
     if not submissions_dir.exists():
         raise ValueError(f"Submissions directory {submissions_dir} does not exist")
-    files = list(submissions_dir.glob("**/*.parquet"))
+    files = list(submissions_dir.glob("**/*.csv"))
     console.print(f"[green]Found {len(files)} submissions to evaluate[/green]")
     return files
 
@@ -86,7 +95,7 @@ def process_submission(
     console.print(f"[yellow]Evaluating submission: {username}/{submission_id}[/yellow]")
 
     try:
-        df = pd.read_parquet(pq_file)
+        df = pd.read_csv(pq_file)
         completions = df["completion"].tolist()
 
         if username not in scores:
@@ -172,13 +181,12 @@ def extract_scores(response):
     "Extract scores from the model's response"
     scores = {}
     # Extract individual category scores
-    for category in ["GRAMMAR", "CREATIVITY", "CONSISTENCY", "PLOT", "OVERALL"]:
-        pattern = f"{category}: (\\d+)"
-        match = re.search(pattern, response, re.IGNORECASE)
-        if match:
-            scores[category.lower()] = int(match.group(1))
-        else:
-            scores[category.lower()] = 5  # Default if not found
+    for category in ScoreCategory:
+        pattern = f"{category.value}: (\\d+(?:\\.\\d+)?)"
+        # Find all matches and use the last one if multiple exist
+        matches = re.findall(pattern, response, re.IGNORECASE)
+        if matches:
+            scores[category.lower()] = int(matches[-1])
     return scores
 
 
@@ -312,18 +320,17 @@ def eval_completions(
         # Process each response
         for idx, response in responses.items():
             # Extract score
-            item_score = 5  # Default score
             try:
-                score_match = extract_scores(response)["overall"]
-                if score_match:
-                    item_score = min(10, max(1, int(score_match)))
+                item_scores = extract_scores(response)
+                for key, value in list(item_scores.items()):
+                    item_scores[key] = min(10, max(1, value))
             except Exception as e:
                 console.print(f"[red]Error extracting score from '{response}': {str(e)}[/red]")
 
             # Store the score
-            details_item = {"item_id": idx, "score": item_score}
+            details_item = {"item_id": idx, "scores": item_scores}
             scores[username][submission_id]["details"].append(details_item)
-            total_score += item_score
+            total_score += item_scores.get("overall", 0)
             processed_count += 1
 
             # Add to log if enabled
@@ -333,7 +340,7 @@ def eval_completions(
                         "item_id": idx,
                         "prompt": prompts_log.get(idx, ""),
                         "response": response,
-                        "score": item_score,
+                        "scores": item_scores,
                         "metadata": {
                             k: v.item() if isinstance(v, torch.Tensor) else v
                             for k, v in metadata.get(idx, {}).items()
@@ -430,7 +437,7 @@ def evaluate(
 
 
 def download_new_submissions(
-    dataset_id: str = "cluster-of-stars/TinyStoriesHackathon", output_dir: Union[str, Path] = "downloaded_submissions"
+    dataset_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions", output_dir: Union[str, Path] = "downloaded_submissions"
 ) -> List[Dict[str, Any]]:
     "Download all new submissions from HF dataset."
     # Get HF API
