@@ -8,6 +8,8 @@ from typing import Annotated, Optional
 # Initialize Typer app and console
 app = typer.Typer()
 console = Console()
+
+
 def create_sample_submission(output_file: str = "sample_submission.csv", dataset_file: str = "valid.parquet", num_samples: int = 1000):
     "Create a sample submission from TinyStories validation data"
     dataset_file = dataset_file
@@ -24,7 +26,7 @@ def create_sample_submission(output_file: str = "sample_submission.csv", dataset
         completions.append(text[: -len(text) // 10])  # remove last 10% so not perfect
 
     # Create submission dataframe
-    submission_df = pd.DataFrame({"completion": completions})
+    submission_df = pd.DataFrame({"prompt": df["text"], "completion": completions})
 
     # Save as CSV
     submission_df.to_csv(output_file, index=False)
@@ -33,7 +35,6 @@ def create_sample_submission(output_file: str = "sample_submission.csv", dataset
 
 
 @app.command()
-
 def create_submission_sample(
     output_file: Annotated[str, typer.Option(help="Please to put test submission")] = "sample_submission.csv",
     dataset_file: Annotated[str, typer.Option(help="Location of test data")] = "valid.parquet",
