@@ -417,10 +417,18 @@ def eval_completions(
                 )
 
                 templated_prompt = generator.tokenizer.apply_chat_template(raw_prompt, add_generation_prompt=True, tokenize=False)
-                prompt_ids = generator.tokenizer.encode(templated_prompt, encode_special_tokens=True)
 
-                # Store followup prompt for logging
-                followup_prompts_log[original_idx] = templated_prompt
+                # Extract the portion of the templated prompt that comes after the previous response
+                # First, escape any special characters in the previous response
+                escaped_response = re.escape(previous_response)
+                # Find where the previous response ends in the templated prompt
+                match = re.search(escaped_response, templated_prompt)
+                if match:
+                    # Extract everything after the previous response
+                    followup_part = templated_prompt[match.end() :]
+                    followup_prompts_log[original_idx] = followup_part
+
+                prompt_ids = generator.tokenizer.encode(templated_prompt, encode_special_tokens=True)
 
                 # Create new job with new identifier
                 followup_idx = 1000000 + followup_count  # Use a large offset to avoid ID conflicts
