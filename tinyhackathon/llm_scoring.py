@@ -385,7 +385,7 @@ def eval_completions(
 
 
 def write_csv(path: Path, scores: Dict[str, Dict[str, Dict[str, Any]]]):
-    header = ["username", "submission_id", "model_arch", "score", "item_id", "grammer", "creativity", "consistency", "plot", "overall"]
+    header = ["username", "submission_id", "model_arch", "score", "item_id", "grammar", "creativity", "consistency", "plot", "overall"]
     with open(path.as_posix(), "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(header)
@@ -394,7 +394,7 @@ def write_csv(path: Path, scores: Dict[str, Dict[str, Dict[str, Any]]]):
                 score = scores[user][submission]["score"]
                 arch = scores[user][submission]["model_arch"]
                 for item in scores[user][submission]["details"]:
-                    ind_scores = [(item["scores"][h] if h in item["scores"] else 5) for h in header[5:]]
+                    ind_scores = [(item["scores"][h] if h in item["scores"] else "#") for h in header[5:]]
                     writer.writerow([user, submission, arch, score, item["item_id"], *ind_scores])
 
 
@@ -415,7 +415,7 @@ def read_csv(path: str):
             if submission not in scores[user]:
                 scores[user][submission] = {"score": float(score), "model_arch": model_arch}
             item_id = item[4]
-            ind_scores = {h: float(r) for h, r in zip(header[5:], item[5:])}
+            ind_scores = {h: float(r) for h, r in zip(header[5:], item[5:]) if r != "#"}
             scores[user][submission]["details"] = [{header[4]: int(item_id), "scores": ind_scores}]
     return scores
 
