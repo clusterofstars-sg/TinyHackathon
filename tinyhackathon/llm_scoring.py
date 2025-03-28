@@ -48,7 +48,7 @@ def create_evaluation_prompt(story_start: str, completion: str, prompt_file: Uni
 
     if not prompt_file.exists():
         console.print(f"[red]Prompt file {prompt_file} not found, using default prompts[/red]")
-        typer.exit(1)
+        typer.Exit(1)
     else:
         # Load prompts from YAML file
         try:
@@ -183,7 +183,7 @@ def extract_scores(response):
         # Find all matches and use the last one if multiple exist
         matches = re.findall(pattern, response, re.IGNORECASE)
         if matches:
-            scores[category.lower()] = int(matches[-1])
+            scores[category.lower()] = float(matches[-1])
     return scores
 
 
