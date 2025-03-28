@@ -19,6 +19,7 @@ from hf_upload import get_hf_user
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
+import csv
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
@@ -86,9 +87,9 @@ def process_submission(
     "Process a single submission file and evaluate its completions."
     username = submission_file.parent.name
     submission_id = submission_file.stem
-
-    if username in scores and submission_id in scores[username]:
-        console.print(f"[blue]Skipping already evaluated submission: {username}/{submission_id}[/blue]")
+    model_arch = generator.model.config.architecture
+    if username in scores and submission_id in scores[username] and model_arch == scores[username][submission_id]["model_arch"]:
+        console.print(f"[blue]Skipping already evaluated submission: {username}/{submission_id}/{model_arch}[/blue]")
         return scores
 
     console.print(f"[yellow]Evaluating submission: {username}/{submission_id}[/yellow]")
@@ -102,7 +103,11 @@ def process_submission(
             scores[username] = {}
 
         if submission_id not in scores[username]:
-            scores[username][submission_id] = {"score": 0, "details": []}
+            scores[username][submission_id] = {
+                "model_arch": generator.model.config.architecture,
+                "score": 0,
+                "details": [],
+            }
 
         # Create log file path if logging is enabled
         log_file = None
@@ -150,7 +155,7 @@ def evaluate_submissions(
     output_file = Path(output_file)
     scores: Dict[str, Dict[str, Dict[str, Any]]] = {}
     if output_file.exists():
-        scores = json.loads(output_file.read_text())
+        scores = read_csv(output_file)
 
     for submission_file in submission_files:
         scores = process_submission(
@@ -369,7 +374,7 @@ def eval_completions(
         if processed_count > 0:
             avg_score = total_score / processed_count
             scores[username][submission_id]["score"] = avg_score
-            output_file.write_text(json.dumps(scores, indent=2))
+            write_csv(output_file, scores)
             console.print(f"[green]Completed processing {processed_count} responses with final avg score: {avg_score:.2f}[/green]")
 
     except Exception as e:
@@ -379,10 +384,46 @@ def eval_completions(
     return scores
 
 
+def write_csv(path: Path, scores: Dict[str, Dict[str, Dict[str, Any]]]):
+    header = ["username", "submission_id", "model_arch", "score", "item_id", "grammer", "creativity", "consistency", "plot", "overall"]
+    with open(path.as_posix(), "w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(header)
+        for user in scores:
+            for submission in scores[user]:
+                score = scores[user][submission]["score"]
+                arch = scores[user][submission]["model_arch"]
+                for item in scores[user][submission]["details"]:
+                    ind_scores = [(item["scores"][h] if h in item["scores"] else 5) for h in header[5:]]
+                    writer.writerow([user, submission, arch, score, item["item_id"], *ind_scores])
+
+
+def read_csv(path: str):
+    with open(path, "r") as file:
+        reader = csv.reader(file)
+        header = next(reader)
+        scores = {}
+        for item in reader:
+            (
+                user,
+                submission,
+                model_arch,
+                score,
+            ) = item[0], item[1], item[2], item[3]
+            if user not in scores:
+                scores[user] = {}
+            if submission not in scores[user]:
+                scores[user][submission] = {"score": float(score), "model_arch": model_arch}
+            item_id = item[4]
+            ind_scores = {h: float(r) for h, r in zip(header[5:], item[5:])}
+            scores[user][submission]["details"] = [{header[4]: int(item_id), "scores": ind_scores}]
+    return scores
+
+
 @app.command()
 def evaluate(
     model_dir: Annotated[str, typer.Argument(help="Directory containing the ExLlama2 model files")],
-    output_file: Annotated[str, typer.Option(help="Path to save scores JSON")] = "scores.json",
+    output_file: Annotated[str, typer.Option(help="Path to save scores JSON")] = "scores.csv",
     submissions_dir: Annotated[str, typer.Option(help="Directory containing submission files")] = "downloaded_submissions",
     temperature: Annotated[float, typer.Option(help="Temperature for generation sampling")] = 1.0,
     top_p: Annotated[float, typer.Option(help="Top-p (nucleus) sampling value")] = 0.9,
