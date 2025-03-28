@@ -1,3 +1,4 @@
+import csv
 import datetime
 import json
 import re
@@ -19,7 +20,6 @@ from hf_upload import get_hf_user
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
-import csv
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
@@ -43,8 +43,10 @@ def load_submissions(submissions_dir: Union[str, Path]) -> List[Path]:
     return files
 
 
-def create_evaluation_prompt(story_start: str, completion: str, prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml"):
-    "Create a structured prompt for evaluating story completions from a YAML file"
+def create_evaluation_prompt(
+    story_start: str, completion: str, prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml", previous_response: Optional[str] = None
+):
+    "Create a structured prompt for evaluating story completions from a YAML file, with optional follow-up"
     prompt_file = Path(prompt_file) if not isinstance(prompt_file, Path) else prompt_file
 
     if not prompt_file.exists():
@@ -58,6 +60,7 @@ def create_evaluation_prompt(story_start: str, completion: str, prompt_file: Uni
 
             system_prompt = prompts.get("system_prompt", "")
             user_prompt = prompts.get("user_prompt", "")
+            followup_prompt = prompts.get("followup_prompt", "")
         except Exception as e:
             console.print(f"[red]Error loading prompts from {prompt_file}: {str(e)}[/red]")
             raise
@@ -65,10 +68,22 @@ def create_evaluation_prompt(story_start: str, completion: str, prompt_file: Uni
     # Format the user prompt with provided values
     user_prompt = user_prompt.format(story_start=story_start, completion=completion)
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
+    # Create messages based on whether this is initial or follow-up
+    if previous_response is None:
+        # Initial prompt
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+    else:
+        # Follow-up prompt
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+            {"role": "assistant", "content": previous_response},
+            {"role": "user", "content": followup_prompt},
+        ]
+
     return messages
 
 
@@ -98,6 +113,10 @@ def process_submission(
         df = pd.read_csv(submission_file)
         prompts = df["prompt"].tolist()
         completions = df["completion"].tolist()
+
+        if sample is not None:
+            prompts = prompts[:sample]
+            completions = completions[:sample]
 
         if username not in scores:
             scores[username] = {}
@@ -189,7 +208,96 @@ def extract_scores(response):
         matches = re.findall(pattern, response, re.IGNORECASE)
         if matches:
             scores[category.lower()] = float(matches[-1])
-    return scores
+
+    # Check if all required categories have scores
+    success = all(category.lower() in scores for category in ScoreCategory)
+    return scores, success
+
+
+def run_batch_evaluation(
+    generator: ExLlamaV2DynamicGenerator,
+    jobs_data: List[Dict[str, Any]],
+    description: str,
+) -> Dict[int, Dict[str, Any]]:
+    """
+    Run a batch of evaluation jobs through the generator.
+
+    Args:
+        generator: The ExLlamaV2DynamicGenerator instance
+        jobs_data: List of dicts containing job data with keys 'prompt_ids' and 'identifier'
+        description: Description for the progress bar
+
+    Returns:
+        Dictionary mapping identifiers to dicts with 'response' and 'metadata'
+    """
+    # Queue all jobs
+    for job_data in jobs_data:
+        job = ExLlamaV2DynamicJob(
+            input_ids=job_data["prompt_ids"],
+            gen_settings=job_data["gen_settings"],
+            max_new_tokens=job_data["max_new_tokens"],
+            stop_conditions=[generator.tokenizer.eos_token_id],
+            identifier=job_data["identifier"],
+        )
+        generator.enqueue(job)
+
+    # Process jobs and collect results
+    results = {}
+    num_completions = 0
+    num_tokens = 0
+    total_jobs = generator.num_remaining_jobs()
+    time_begin = time.time()
+
+    # Generate all completions with progress bar
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        # Create the main progress task
+        task = progress.add_task(f"[green]{description}", total=total_jobs)
+
+        while generator.num_remaining_jobs():
+            try:
+                batch_results = generator.iterate()
+
+                # Track tokens processed
+                bsz = len(set([r["identifier"] for r in batch_results]))
+                num_tokens += bsz
+
+                for result in batch_results:
+                    idx = result["identifier"]
+
+                    if not result["eos"]:
+                        continue
+
+                    # For EOS results, get the full completion
+                    results[idx] = {"response": result["full_completion"], "metadata": result}
+                    num_completions += 1
+
+                    # Update progress
+                    progress.update(task, completed=num_completions)
+
+            except Exception as e:
+                console.print(f"[red]Error in generator iteration: {str(e)}[/red]")
+                traceback.print_exc()
+                continue
+
+    # Output statistics
+    elapsed_time = time.time() - time_begin
+    rpm = num_completions / (elapsed_time / 60) if elapsed_time > 0 else 0
+    tps = num_tokens / elapsed_time if elapsed_time > 0 else 0
+    console.print()
+    console.print(f"[blue]Avg. completions/minute: {rpm:.2f}[/blue]")
+    console.print(f"[blue]Avg. output tokens/second: {tps:.2f}[/blue]")
+    console.print()
+
+    return results
 
 
 def eval_completions(
@@ -207,22 +315,21 @@ def eval_completions(
     log_file: Optional[Path] = None,
     prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml",
 ):
-    "Evaluate each completion in a submission using batch processing."
+    "Evaluate each completion in a submission using batch processing with re-prompting for missing scores."
     try:
         # Create sampler settings
         gen_settings = ExLlamaV2Sampler.Settings(temperature=temperature, top_p=top_p, token_repetition_penalty=1.0, top_k=0)
-        # Queue all jobs
-        console.print(f"[yellow]Queueing {len(completions)} evaluation jobs...[/yellow]")
 
         # Reset generator queue if needed
         if generator.num_remaining_jobs() > 0:
             console.print("[yellow]Clearing existing generator queue...[/yellow]")
             generator.clear_queue()
 
-        # Queue all evaluation jobs
-        responses = {}
-        metadata = {}
+        # Prepare initial evaluation jobs
+        console.print(f"[yellow]Queueing {len(completions)} evaluation jobs...[/yellow]")
+        initial_jobs_data = []
         prompts_log = {}
+        followup_prompts_log = {}
 
         for i, (beginning, completion) in enumerate(zip(prompts, completions)):
             raw_prompt = create_evaluation_prompt(story_start=beginning, completion=completion, prompt_file=prompt_file)
@@ -232,81 +339,135 @@ def eval_completions(
             prompts_log[i] = templated_prompt
 
             prompt_ids = generator.tokenizer.encode(templated_prompt, encode_special_tokens=True)
-            job = ExLlamaV2DynamicJob(
-                input_ids=prompt_ids,
-                gen_settings=gen_settings,
-                max_new_tokens=max_new_tokens,
-                stop_conditions=[generator.tokenizer.eos_token_id],
-                identifier=i,
+            initial_jobs_data.append(
+                {
+                    "prompt_ids": prompt_ids,
+                    "gen_settings": gen_settings,
+                    "max_new_tokens": max_new_tokens,
+                    "identifier": i,
+                }
             )
-            generator.enqueue(job)
-            responses[i] = ""  # Initialize empty response
 
-        # Process jobs and collect results
+        # Run initial evaluation
         console.print("[yellow]Processing evaluation jobs...[/yellow]")
+        initial_results = run_batch_evaluation(generator, initial_jobs_data, f"Evaluating {username}/{submission_id}")
 
-        time_begin = time.time()
-        num_completions = 0
-        num_tokens = 0
-        total_jobs = generator.num_remaining_jobs()
-
-        # Generate all completions with progress bar
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
-            # Create the main progress task
-            task = progress.add_task(f"[green]Evaluating {username}/{submission_id}", total=total_jobs)
-
-            while generator.num_remaining_jobs():
-                try:
-                    results = generator.iterate()
-
-                    # Track tokens processed
-                    bsz = len(set([r["identifier"] for r in results]))
-                    num_tokens += bsz
-
-                    for result in results:
-                        idx = result["identifier"]
-
-                        if not result["eos"]:
-                            continue
-
-                        # For EOS results, get the full completion
-                        responses[idx] = result["full_completion"]
-                        metadata[idx] = result
-                        num_completions += 1
-
-                        # Update progress
-                        progress.update(task, completed=num_completions)
-
-                except Exception as e:
-                    console.print(f"[red]Error in generator iteration: {str(e)}[/red]")
-                    traceback.print_exc()
-                    continue
-
-        # Output statistics
-        elapsed_time = time.time() - time_begin
-        rpm = num_completions / (elapsed_time / 60) if elapsed_time > 0 else 0
-        tps = num_tokens / elapsed_time if elapsed_time > 0 else 0
-        console.print()
-        console.print(f"[blue]Avg. completions/minute: {rpm:.2f}[/blue]")
-        console.print(f"[blue]Avg. output tokens/second: {tps:.2f}[/blue]")
-        console.print()
-
-        # Process all responses and update scores
+        # Process all responses and check for missing scores
         console.print("[yellow]Processing responses and calculating scores...[/yellow]")
 
         # Initialize details list if needed
         if "details" not in scores[username][submission_id]:
             scores[username][submission_id]["details"] = []
 
+        # Prepare data structures
+        responses = {}
+        followup_responses = {}
+        metadata = {}
+        item_scores = {}
+        items_needing_followup = set()
+
+        # Extract responses and check which need follow-up
+        for idx, result_data in initial_results.items():
+            response = result_data["response"]
+            responses[idx] = response
+            metadata[idx] = result_data["metadata"]
+
+            # Extract score
+            try:
+                extracted_scores, success = extract_scores(response)
+                for key, value in list(extracted_scores.items()):
+                    extracted_scores[key] = min(10, max(1, value))
+
+                # If we're missing any scores, mark for follow-up
+                if not success:
+                    items_needing_followup.add(idx)
+                    console.print(f"[yellow]Item {idx} missing scores, will re-prompt[/yellow]")
+
+                # Store scores (may be updated later if follow-up is needed)
+                item_scores[idx] = extracted_scores
+
+            except Exception as e:
+                console.print(f"[red]Error extracting score from response for item {idx}: {str(e)}[/red]")
+                items_needing_followup.add(idx)
+
+        # Handle follow-up prompts if needed
+        follow_up_count = len(items_needing_followup)
+        success_count = 0
+
+        if follow_up_count > 0:
+            console.print(f"[yellow]Re-prompting {follow_up_count} items with missing scores...[/yellow]")
+
+            # Clear generator queue
+            if generator.num_remaining_jobs() > 0:
+                generator.clear_queue()
+
+            # Prepare follow-up jobs
+            followup_jobs_data = []
+            followup_id_mapping = {}  # Maps new queue IDs to original IDs
+            followup_count = 0
+
+            for original_idx in items_needing_followup:
+                beginning = prompts[original_idx]
+                completion = completions[original_idx]
+                previous_response = responses[original_idx]
+
+                # Create follow-up prompt
+                raw_prompt = create_evaluation_prompt(
+                    story_start=beginning, completion=completion, prompt_file=prompt_file, previous_response=previous_response
+                )
+
+                templated_prompt = generator.tokenizer.apply_chat_template(raw_prompt, add_generation_prompt=True, tokenize=False)
+                prompt_ids = generator.tokenizer.encode(templated_prompt, encode_special_tokens=True)
+
+                # Store followup prompt for logging
+                followup_prompts_log[original_idx] = templated_prompt
+
+                # Create new job with new identifier
+                followup_idx = 1000000 + followup_count  # Use a large offset to avoid ID conflicts
+                followup_id_mapping[followup_idx] = original_idx
+
+                followup_jobs_data.append(
+                    {
+                        "prompt_ids": prompt_ids,
+                        "gen_settings": gen_settings,
+                        "max_new_tokens": max_new_tokens,
+                        "identifier": followup_idx,
+                    }
+                )
+
+                followup_count += 1
+
+            # Run follow-up evaluation
+            console.print(f"[yellow]Processing {followup_count} follow-up evaluation jobs...[/yellow]")
+            followup_results = run_batch_evaluation(generator, followup_jobs_data, "Re-evaluating items with missing scores")
+
+            # Process follow-up responses
+            console.print(f"[yellow]Processing {len(followup_results)} follow-up responses...[/yellow]")
+
+            for followup_idx, result_data in followup_results.items():
+                original_idx = followup_id_mapping[followup_idx]
+                followup_response = result_data["response"]
+
+                # Store follow-up response separately
+                followup_responses[original_idx] = followup_response
+
+                try:
+                    extracted_scores, success = extract_scores(followup_response)
+
+                    for key, value in list(extracted_scores.items()):
+                        extracted_scores[key] = min(10, max(1, value))
+
+                    if success:
+                        success_count += 1
+                        # Update with successfully extracted scores
+                        item_scores[original_idx] = extracted_scores
+
+                except Exception as e:
+                    console.print(f"[red]Error extracting score from follow-up response for item {original_idx}: {str(e)}[/red]")
+
+            console.print(f"[green]Successfully retrieved scores for {success_count}/{follow_up_count} items after re-prompting[/green]")
+
+        # Update scores and prepare logs
         total_score = 0
         processed_count = 0
 
@@ -319,37 +480,40 @@ def eval_completions(
                 "evaluations": [],
             }
 
-        # Process each response
-        for idx, response in responses.items():
-            # Extract score
-            try:
-                item_scores = extract_scores(response)
-                for key, value in list(item_scores.items()):
-                    item_scores[key] = min(10, max(1, value))
-            except Exception as e:
-                console.print(f"[red]Error extracting score from '{response}': {str(e)}[/red]")
+        # Process each response and store final scores
+        for idx in range(len(prompts)):
+            if idx in item_scores:
+                # Store the score
+                details_item = {"item_id": idx, "scores": item_scores[idx]}
+                scores[username][submission_id]["details"].append(details_item)
+                total_score += item_scores[idx].get("overall", 0)
+                processed_count += 1
 
-            # Store the score
-            details_item = {"item_id": idx, "scores": item_scores}
-            scores[username][submission_id]["details"].append(details_item)
-            total_score += item_scores.get("overall", 0)
-            processed_count += 1
-
-            # Add to log if enabled
-            if log_file:
-                log_data["evaluations"].append(
-                    {
+                # Add to log if enabled
+                if log_file:
+                    log_item = {
                         "item_id": idx,
                         "prompt": prompts_log.get(idx, ""),
-                        "response": response,
-                        "scores": item_scores,
-                        "metadata": {
+                        "response": responses.get(idx, ""),
+                        "scores": item_scores[idx],
+                    }
+
+                    # Add follow-up prompt and response if they exist
+                    if idx in followup_prompts_log:
+                        log_item["followup_prompt"] = followup_prompts_log.get(idx, "")
+
+                    if idx in followup_responses:
+                        log_item["followup_response"] = followup_responses.get(idx, "")
+
+                    # Add metadata if available
+                    if idx in metadata:
+                        log_item["metadata"] = {
                             k: v.item() if isinstance(v, torch.Tensor) else v
                             for k, v in metadata.get(idx, {}).items()
                             if k not in ["full_completion", "job", "held"]
-                        },
-                    }
-                )
+                        }
+
+                    log_data["evaluations"].append(log_item)
 
         # Save logs if enabled
         if log_file and processed_count > 0:
@@ -376,6 +540,8 @@ def eval_completions(
             scores[username][submission_id]["score"] = avg_score
             write_csv(output_file, scores)
             console.print(f"[green]Completed processing {processed_count} responses with final avg score: {avg_score:.2f}[/green]")
+            if follow_up_count > 0:
+                console.print(f"[blue]Re-prompted {follow_up_count} items, successfully retrieved scores for {success_count} items[/blue]")
 
     except Exception as e:
         console.print(f"[red]Error in eval_completions: {str(e)}[/red]")
