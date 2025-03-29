@@ -20,7 +20,7 @@ system_prompt: |
       - E: 10-12
       - F: 13 and up
 
-    - **Grammer**: Is the writing grammatically correct and appropriately punctuated?
+    - **Grammar**: Is the writing grammatically correct and appropriately punctuated?
     - **Creativity**: Does the completion show imagination, creativity, or original ideas?
     - **Consistency**: Does the continuation match the beginning in tone, characters, and setting?
     - **Plot**: Does the whole story make sense? Is there a clear beginning, middle, and end?
@@ -47,6 +47,19 @@ user_prompt: |
   Evaluate the story continuation based on the five criteria (Age, Grammer, Creativity, Consistency, Plot) and provide an Overall score between 1 and 10.
 
   Don't forget to give your final assessment:
+
+  AGE: [A, B, C, D, E, or F]
+  GRAMMAR: [score]
+  CREATIVITY: [score]
+  CONSISTENCY: [score]
+  PLOT: [score]
+  OVERALL: [score]
+
+# Follow-up prompt
+followup_prompt: |
+  You either forgot to provide a score for one of the categories, provided a score that is not between 1 and 10, or ran out of tokens before providing the scores.
+
+  Do not ouput any new reasoning. Just provide the scores.
 
   AGE: [A, B, C, D, E, or F]
   GRAMMAR: [score]

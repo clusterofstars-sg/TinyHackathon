@@ -930,7 +930,10 @@ name = "tinyhackathon"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "datasets" },
+    { name = "huggingface-hub" },
     { name = "numpy" },
+    { name = "pandas" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -943,9 +946,7 @@ flash = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "datasets" },
     { name = "exllamav2" },
-    { name = "huggingface-hub" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "setuptools" },
@@ -956,9 +957,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "datasets", specifier = ">=3.4.1" },
     { name = "einops", marker = "extra == 'flash'", specifier = ">=0.8.0" },
     { name = "flash-attn", marker = "extra == 'flash'", specifier = ">=2.7.4" },
+    { name = "huggingface-hub", specifier = ">=0.29.3" },
     { name = "numpy", specifier = ">=2.2.4" },
+    { name = "pandas", specifier = ">=2.2.3" },
     { name = "rich", specifier = ">=13.9.4" },
     { name = "typer", specifier = ">=0.15.2" },
 ]
@@ -966,9 +970,7 @@ provides-extras = ["flash"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "datasets", specifier = ">=3.4.1" },
     { name = "exllamav2", url = "https://github.com/turboderp-org/exllamav2/releases/download/v0.2.8/exllamav2-0.2.8+cu124.torch2.6.0-cp312-cp312-linux_x86_64.whl" },
-    { name = "huggingface-hub", specifier = ">=0.29.3" },
     { name = "pytest", specifier = ">=8.3.5" },
     { name = "ruff", specifier = ">=0.11.1" },
     { name = "setuptools", specifier = ">=75.8.0" },

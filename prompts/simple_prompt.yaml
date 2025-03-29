@@ -29,3 +29,13 @@ user_prompt: |
   </story>
 
   Evaluate the student's completion based on the four criteria (GRAMMAR, CREATIVITY, CONSISTENCY, and PLOT) and provide an OVERALL score between 1 and 10.
+
+# Follow-up prompt
+followup_prompt: |
+  You either forgot to provide a score for one of the categories, provided a score that is not between 1 and 10, or ran out of tokens before providing the scores. Please provide all the scores using your reasoning from the previous response.
+
+  GRAMMAR: [score]
+  CREATIVITY: [score]
+  CONSISTENCY: [score]
+  PLOT: [score]
+  OVERALL: [average of the four scores]
