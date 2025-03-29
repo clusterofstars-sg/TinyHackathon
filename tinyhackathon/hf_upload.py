@@ -1,3 +1,15 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "numpy>=2.2.4",
+#     "rich>=13.9.4",
+#     "typer>=0.15.2",
+#     "huggingface-hub>=0.29.3",
+#     "datasets>=3.4.1",
+#     "pandas>=2.2.3",
+# ]
+# ///
+
 import os
 import re
 import tempfile
