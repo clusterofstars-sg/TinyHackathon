@@ -103,7 +103,7 @@ def process_submission(
     username = submission_file.parent.name
     submission_id = submission_file.stem
     model_arch = generator.model.config.architecture
-    if username in scores and submission_id in scores[username] and model_arch == scores[username][submission_id]["model_arch"]:
+    if username in scores and submission_id in scores[username] and model_arch in scores[username][submission_id]:
         console.print(f"[blue]Skipping already evaluated submission: {username}/{submission_id}/{model_arch}[/blue]")
         return scores
 
@@ -122,8 +122,10 @@ def process_submission(
             scores[username] = {}
 
         if submission_id not in scores[username]:
-            scores[username][submission_id] = {
-                "model_arch": generator.model.config.architecture,
+            scores[username][submission_id] = {}
+
+        if model_arch not in scores[username][submission_id]:
+            scores[username][submission_id][model_arch] = {
                 "score": 0,
                 "details": [],
             }
@@ -137,7 +139,7 @@ def process_submission(
             console.print(f"[yellow]Will log prompts and responses to {log_file}[/yellow]")
 
         scores = eval_completions(prompts, completions, generator, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens, sample=sample, log_file=log_file, prompt_file=prompt_file)  # fmt: skip
-        console.print(f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id]['score']:.2f}[/green]")  # fmt: skip
+        console.print(f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id][model_arch]['score']:.2f}[/green]")  # fmt: skip
 
     except Exception as e:
         console.print(f"[red]Error processing {username}/{submission_id}: {str(e)}[/red]")
@@ -192,10 +194,49 @@ def evaluate_submissions(
 
     leaderboard = []
     for username, user_submissions in scores.items():
-        best_score = max(sub["score"] for sub in user_submissions.values())
-        leaderboard.append({"username": username, "score": best_score})
+        (best_score, avg_idv_score, avg_consistency_score) = calc_scores(user_submissions)
+        leaderboard.append(
+            {
+                "username": username,
+                "score": best_score,
+                "average_individual_score": avg_idv_score,
+                "average_consistency_score": avg_consistency_score,
+            }
+        )
+
     leaderboard.sort(key=lambda x: x["score"], reverse=True)
     return scores, leaderboard
+
+
+def calc_scores(user_submissions):
+    "Calculate scores for single user"
+    idv_headers = ["grammar", "creativity", "consistency", "plot"]
+    avg_scores = []
+    avg_idv_scores = []
+    avg_consistency_scores = []
+    for submission in user_submissions.values():
+        model_scores = [model_arch["score"] for model_arch in submission.values()]
+        avg_scores += [sum(model_scores) / len(model_scores)]
+        item_scores = [model_arch["details"] for model_arch in submission.values()]
+        item_scores = sum(item_scores, [])  # concat arrays for all models
+
+        def filter_by_header(scores: Dict[str, float]):
+            return [scores[header] for header in idv_headers if header in scores]
+
+        def mean(scores: Dict[str, float]):
+            return sum(filter_by_header(scores)) / len(filter_by_header(scores))
+
+        idv_avg_scores = [mean(item["scores"]) for item in item_scores]
+        avg_idv_scores += [sum(idv_avg_scores) / len(idv_avg_scores)]
+        consistency_scores = [model_arch["details"] for model_arch in submission.values()]
+        consistency_scores = sum(consistency_scores, [])  # concat arrays for all models
+        consistency_scores = [item["scores"]["consistency"] for item in consistency_scores]
+        avg_consistency_scores += [sum(consistency_scores) / len(consistency_scores)]
+    max_score = max(avg_scores)
+    max_index = avg_scores.index(max_score)
+    max_idv_score = avg_idv_scores[max_index]
+    max_consistency_score = avg_consistency_scores[max_index]
+    return (max_score, max_idv_score, max_consistency_score)
 
 
 def extract_scores(response):
@@ -320,6 +361,8 @@ def eval_completions(
         # Create sampler settings
         gen_settings = ExLlamaV2Sampler.Settings(temperature=temperature, top_p=top_p, token_repetition_penalty=1.0, top_k=0)
 
+        model_arch = generator.model.config.architecture
+
         # Reset generator queue if needed
         if generator.num_remaining_jobs() > 0:
             console.print("[yellow]Clearing existing generator queue...[/yellow]")
@@ -356,8 +399,8 @@ def eval_completions(
         console.print("[yellow]Processing responses and calculating scores...[/yellow]")
 
         # Initialize details list if needed
-        if "details" not in scores[username][submission_id]:
-            scores[username][submission_id]["details"] = []
+        if "details" not in scores[username][submission_id][model_arch]:
+            scores[username][submission_id][model_arch]["details"] = []
 
         # Prepare data structures
         responses = {}
@@ -493,7 +536,7 @@ def eval_completions(
             if idx in item_scores:
                 # Store the score
                 details_item = {"item_id": idx, "scores": item_scores[idx]}
-                scores[username][submission_id]["details"].append(details_item)
+                scores[username][submission_id][model_arch]["details"].append(details_item)
                 total_score += item_scores[idx].get("overall", 0)
                 processed_count += 1
 
@@ -545,7 +588,7 @@ def eval_completions(
         # Final update
         if processed_count > 0:
             avg_score = total_score / processed_count
-            scores[username][submission_id]["score"] = avg_score
+            scores[username][submission_id][model_arch]["score"] = avg_score
             write_csv(output_file, scores)
             console.print(f"[green]Completed processing {processed_count} responses with final avg score: {avg_score:.2f}[/green]")
             if follow_up_count > 0:
@@ -565,11 +608,11 @@ def write_csv(path: Path, scores: Dict[str, Dict[str, Dict[str, Any]]]):
         writer.writerow(header)
         for user in scores:
             for submission in scores[user]:
-                score = scores[user][submission]["score"]
-                arch = scores[user][submission]["model_arch"]
-                for item in scores[user][submission]["details"]:
-                    ind_scores = [(item["scores"][h] if h in item["scores"] else "#") for h in header[5:]]
-                    writer.writerow([user, submission, arch, score, item["item_id"], *ind_scores])
+                for model_arch in scores[user][submission]:
+                    score = scores[user][submission][model_arch]["score"]
+                    for item in scores[user][submission][model_arch]["details"]:
+                        ind_scores = [(item["scores"][h] if h in item["scores"] else "#") for h in header[5:]]
+                        writer.writerow([user, submission, model_arch, score, item["item_id"], *ind_scores])
 
 
 def read_csv(path: str):
@@ -587,10 +630,16 @@ def read_csv(path: str):
             if user not in scores:
                 scores[user] = {}
             if submission not in scores[user]:
-                scores[user][submission] = {"score": float(score), "model_arch": model_arch}
+                scores[user][submission] = {}
+            if model_arch not in scores[user][submission]:
+                scores[user][submission][model_arch] = {
+                    "score": float(score),
+                }
             item_id = item[4]
             ind_scores = {h: float(r) for h, r in zip(header[5:], item[5:]) if r != "#"}
-            scores[user][submission]["details"] = [{header[4]: int(item_id), "scores": ind_scores}]
+            if "details" not in scores[user][submission][model_arch]:
+                scores[user][submission][model_arch]["details"] = []
+            scores[user][submission][model_arch]["details"] += [{header[4]: int(item_id), "scores": ind_scores}]
     return scores
 
 
@@ -632,9 +681,17 @@ def evaluate(
         table.add_column("Rank")
         table.add_column("Username")
         table.add_column("Score")
+        table.add_column("Avg. Individual Score")
+        table.add_column("Avg. Consistency Score")
 
         for i, entry in enumerate(leaderboard[:10]):
-            table.add_row(str(i + 1), entry["username"], f"{entry['score']:.2f}")
+            table.add_row(
+                str(i + 1),
+                entry["username"],
+                f"{entry['score']:.2f}",
+                f"{entry['average_individual_score']:.2f}",
+                f"{entry['average_consistency_score']:.2f}",
+            )
 
         console.print(table)
         console.print(f"[blue]Full results saved to {output_file}[/blue]")
