@@ -209,35 +209,21 @@ def download_dataset(
         console.print(f"[red]Error: {str(e)}[/red]")
 
 
-def download_eval_prompts():
-    url = "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/Evaluation%20prompts.yaml"
+@app.command()
+def download_eval(
+    output_file: Annotated[Path, typer.Option(help="Evaluation prompts file")] = "evaluation_prompts.csv",
+    url: Annotated[
+        str, typer.Option(help="Url for eval data")
+    ] = "https://huggingface.co/datasets/cluster-of-stars/tiny_stories_evaluation_prompts/resolve/main/evaluation_prompts.csv",
+):
+    "Download evaluation prompts for Tiny Stories dackathon"
     response = requests.get(url)
     if response.status_code != 200:
         console.print(f"[red]Error: Failed to download {response.status_code}[/red]")
-    return yaml.safe_load(response.content)
-
-
-@app.command()
-def generate_eval(
-    output_file: Annotated[Path, typer.Option(help="Evaluation prompts file")] = "evaluation_prompts.csv",
-):
-    "Generate evaluation prompts from Tiny Stories dataset"
-    try:
-        data = download_eval_prompts()
-
-        with open(output_file, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["prompt", "completion"])
-            for row in data:
-                for _ in range(4):  # repeat each row 4 times.
-                    writer.writerow([row, ""])
-
-        console.print("[yellow]Sample eval prompt:[/yellow]")
-        sample = data[random.randint(0, len(data) - 1)]
-        console.print(sample)
-
-    except Exception as e:
-        console.print(f"[red]Error: {str(e)}[/red]")
+    else:
+        with open(output_file, "wb") as file:
+            file.write(response.content)
+            console.print(f"Successfully downloaded and saved to {output_file}")
 
 
 if __name__ == "__main__":
