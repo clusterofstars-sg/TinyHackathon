@@ -1,6 +1,16 @@
-import csv
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "numpy>=2.2.4",
+#     "rich>=13.9.4",
+#     "typer>=0.15.2",
+#     "huggingface-hub>=0.29.3",
+#     "datasets>=3.4.1",
+#     "pandas>=2.2.3",
+# ]
+# ///
+
 import os
-import random
 import re
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -10,8 +20,6 @@ from typing import Annotated, Any, Dict, Optional, Tuple, Union
 import pandas as pd
 import requests
 import typer
-import yaml
-from datasets import load_dataset
 from huggingface_hub import HfApi, login
 from rich.console import Console
 
@@ -52,7 +60,9 @@ def get_hf_user() -> Tuple[str, HfApi]:
 
 
 def upload_submission(
-    file_path: Union[str, Path], submission_name: Optional[str] = None, hf_repo: str = "cluster-of-stars/TinyStoriesHackathon_Submissions"
+    file_path: Path,
+    submission_name: Optional[str] = None,
+    hf_repo: str = "cluster-of-stars/TinyStoriesHackathon_Submissions",
 ) -> Dict[str, Any]:
     "Upload a submission to the HF dataset using environment credentials."
     info, api = get_hf_user()
@@ -133,12 +143,11 @@ def upload_submission(
 
 @app.command()
 def submit(
-    file_path: Annotated[str, typer.Argument(help="Path to the submission file")],
+    file_path: Annotated[Path, typer.Argument(help="Path to the submission file")],
     submission_name: Annotated[Optional[str], typer.Option(help="Name of the submission")] = None,
 ):
     "Submit a file to the TinyStories hackathon."
     try:
-        file_path = Path(file_path)
         if not file_path.exists():
             console.print(f"[red]Error: File {file_path} not found[/red]")
             return
@@ -173,49 +182,11 @@ def whoami():
         console.print(f"[red]Error: {str(e)}[/red]")
 
 
-def download_tinystories_dataset(split: str = "validation", output_dir: str = "tinystories_data"):
-    "Download Tiny Stories dataset using hugginface datasets"
-    output_dir = Path(output_dir)
-    output_dir.mkdir(exist_ok=True, parents=True)
-    output_file = output_dir / f"{split}.parquet"
-    if output_file.exists():
-        console.print(f"[green]Dataset already downloaded to {output_file}[/green]")
-        return output_file
-    console.print(f"[yellow]Downloading TinyStories {split} split...[/yellow]")
-    dataset = load_dataset("roneneldan/TinyStories", split=split)
-    df = dataset.to_pandas()
-    df.to_parquet(output_file, index=False)
-    console.print(f"[green]Dataset saved to {output_file}[/green]")
-    return output_file
-
-
-@app.command()
-def download_dataset(
-    split: Annotated[str, typer.Option(help="Split to download, such as train or validation")] = "validation",
-    output_dir: Annotated[str, typer.Option(help="Directory to output data")] = "tinystories_data",
-):
-    "Download Tiny Stories dataset from huggingface"
-    try:
-        output_file = download_tinystories_dataset(split, output_dir)
-        console.print(f"[green]Successfully downloaded TinyStories {split} split to {output_file}[/green]")
-        df = pd.read_parquet(output_file)
-        console.print(f"[blue]Dataset has {len(df)} rows and columns: {', '.join(df.columns)}[/blue]")
-
-        console.print("[yellow]Sample story:[/yellow]")
-        sample = df.sample(1).iloc[0]
-        console.print(sample["text"])
-
-    except Exception as e:
-        console.print(f"[red]Error: {str(e)}[/red]")
-
-
 @app.command()
 def download_eval(
     output_file: Annotated[Path, typer.Option(help="Evaluation prompts file")] = "evaluation_prompts.csv",
-    url: Annotated[
-        str, typer.Option(help="Url for eval data")
-    ] = "https://huggingface.co/datasets/cluster-of-stars/tiny_stories_evaluation_prompts/resolve/main/evaluation_prompts.csv",
-):
+    url: Annotated[str, typer.Option(help="Url for eval data")] = "https://huggingface.co/datasets/cluster-of-stars/tiny_stories_evaluation_prompts/resolve/main/evaluation_prompts.csv",
+):  # fmt: skip
     "Download evaluation prompts for Tiny Stories dackathon"
     response = requests.get(url)
     if response.status_code != 200:
