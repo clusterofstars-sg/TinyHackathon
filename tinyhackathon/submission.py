@@ -107,7 +107,7 @@ def upload_submission(
                             total_hours = time_until_next.seconds // 3600
                             minutes = (time_until_next.seconds % 3600) // 60
 
-                            console.print("[red]Error: You have already submitted today (AOE timezone). Only one submission is allowed per day.[/red]")  # fmt: skip
+                            console.print("\n[red]Error: You have already submitted today (AOE timezone). Only one submission is allowed per day.[/red]")  # fmt: skip
                             console.print(f"[yellow]Your previous submission: {submission}[/yellow]")
                             console.print(f"[yellow]You can submit again in {total_hours} hours and {minutes} minutes (at midnight AOE).[/yellow]")  # fmt: skip
                             raise typer.Exit(code=1)
@@ -116,7 +116,7 @@ def upload_submission(
                         continue
     except Exception as e:
         # Don't prevent submission if we can't check existing submissions
-        console.print(f"[yellow]Warning: Could not check for existing submissions: {str(e)}[/yellow]")
+        console.print(f"\n[yellow]Warning: Could not check for existing submissions: {str(e)}[/yellow]")
 
     # Read submission
     df = read_submission(file_path)
@@ -124,13 +124,13 @@ def upload_submission(
     # Validate columns - must have exactly prompt and completion columns
     expected_columns = set(["prompt", "completion"])
     if set(df.columns) != expected_columns:
-        console.print(f"[red]Error: Submission must contain exactly two columns: 'prompt' and 'completion'. Found: {', '.join(df.columns)}[/red]")  # fmt: skip
+        console.print(f"\n[red]Error: Submission must contain exactly two columns: 'prompt' and 'completion'. Found: {', '.join(df.columns)}[/red]")  # fmt: skip
         raise typer.Exit(code=1)
 
     # Validate that completions are unique
     if df["completion"].duplicated().any():
         duplicate_count = df["completion"].duplicated().sum()
-        console.print(f"[red]Error: All completions must be unique. Found {duplicate_count} duplicate completions.[/red]")
+        console.print(f"\n[red]Error: All completions must be unique. Found {duplicate_count} duplicate completions.[/red]")
         raise typer.Exit(code=1)
 
     # Check if weight_class is provided, and if not, try to get it from existing metadata or prompt
@@ -157,9 +157,8 @@ def upload_submission(
         # If still no weight_class from metadata, prompt the user
         if weight_class is None:
             weight_class = typer.prompt(
-                "Select model weight class size (small: up to 30M, medium: up to 60M, or large: up to 120M)",
+                "\nSelect model weight class size (small: up to 30M, medium: up to 60M, or large: up to 120M) [small|medium|large]",
                 type=WeightClass,
-                default=WeightClass.MEDIUM,
                 show_choices=True,
             )
 
@@ -208,7 +207,7 @@ def upload_submission(
             with open(metadata_path, "w") as f:
                 json.dump(metadata, f)
 
-            console.print(f"[yellow]Updating metadata with weight class: {metadata.get('weight_class')}[/yellow]")
+            console.print(f"\n[yellow]Updating metadata with weight class: {metadata.get('weight_class')}[/yellow]")
             api.upload_file(path_or_fileobj=str(metadata_path), path_in_repo=metadata_remote_path, repo_id=hf_repo, repo_type="dataset")
 
     return dict(
@@ -229,20 +228,20 @@ def submit(
     "Submit a file to the TinyStories hackathon."
     try:
         if not submission_path.exists():
-            console.print(f"[red]Error: File {submission_path} not found[/red]")
+            console.print(f"\n[red]Error: File {submission_path} not found[/red]")
             return
 
         console.print(f"[yellow]Uploading submission from {submission_path}...[/yellow]")
         result = upload_submission(submission_path, submission_name, weight_class)
-        console.print("[green]Submission successful![/green]")
-        console.print(f"Username: [blue]{result['participant']}[/blue]")
+        console.print("\n[green]Submission successful![/green]")
+        console.print(f"\nUsername: [blue]{result['participant']}[/blue]")
         console.print(f"Timestamp: [blue]{result['timestamp']}[/blue]")
         console.print(f"Rows submitted: [blue]{result['n_rows']}[/blue]")
         console.print(f"Stored at: [blue]{result['remote_path']}[/blue]")
         console.print(f"Weight class: [blue]{result['metadata']['weight_class']}[/blue]")
 
     except Exception as e:
-        console.print(f"[red]Error: {str(e)}[/red]")
+        console.print(f"\n[red]Error: {str(e)}[/red]")
 
 
 @app.command()
