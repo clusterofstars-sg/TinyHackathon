@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Annotated, Any, Dict, Optional, Tuple, Union
 
 import pandas as pd
-import requests
 import typer
 from huggingface_hub import HfApi, login
 from rich.console import Console
@@ -136,7 +135,7 @@ def upload_submission(
         df.to_csv(save_path, index=False)
         # Upload to HF
         remote_path = f"submissions/{username}/{timestamp}.csv"
-        api.upload_file(path_or_fileobj=str(save_path), path_in_repo=remote_path, repo_id=hf_repo, repo_type="dataset")
+        # api.upload_file(path_or_fileobj=str(save_path), path_in_repo=remote_path, repo_id=hf_repo, repo_type="dataset")
 
     return dict(participant=username, timestamp=timestamp, n_rows=len(df), remote_path=remote_path)
 
@@ -185,16 +184,21 @@ def whoami():
 @app.command()
 def download_eval(
     output_file: Annotated[Path, typer.Option(help="Evaluation prompts file")] = "evaluation_prompts.csv",
-    url: Annotated[str, typer.Option(help="Url for eval data")] = "https://huggingface.co/datasets/cluster-of-stars/tiny_stories_evaluation_prompts/resolve/main/evaluation_prompts.csv",
+    path_in_repo: Annotated[str, typer.Option(help="Path to file within the repository")] = "evaluation_prompts.csv",
+    repo_id: Annotated[str, typer.Option(help="Hugging Face repository ID")] = "cluster-of-stars/tiny_stories_evaluation_prompts",
 ):  # fmt: skip
-    "Download evaluation prompts for Tiny Stories dackathon"
-    response = requests.get(url)
-    if response.status_code != 200:
-        console.print(f"[red]Error: Failed to download {response.status_code}[/red]")
-    else:
-        with open(output_file, "wb") as file:
-            file.write(response.content)
-            console.print(f"Successfully downloaded and saved to {output_file}")
+    "Download evaluation prompts for Tiny Stories hackathon"
+    api = HfApi()
+    try:
+        api.hf_hub_download(
+            repo_id=repo_id,
+            filename=path_in_repo,
+            local_dir=os.path.dirname(output_file) or ".",
+            repo_type="dataset",
+        )
+        console.print(f"[green]Successfully downloaded and saved to {output_file}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error: Failed to download: {str(e)}[/red]")
 
 
 if __name__ == "__main__":
