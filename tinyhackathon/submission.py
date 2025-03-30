@@ -13,7 +13,9 @@
 import os
 import re
 import tempfile
+import json
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Dict, Optional, Tuple, Union
 
@@ -24,6 +26,12 @@ from rich.console import Console
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
+
+
+class WeightClass(str, Enum):
+    SMALL = "small"
+    MEDIUM = "medium"
+    LARGE = "large"
 
 
 def hf_login(token: Optional[str] = None) -> HfApi:
@@ -61,6 +69,7 @@ def get_hf_user() -> Tuple[str, HfApi]:
 def upload_submission(
     file_path: Path,
     submission_name: Optional[str] = None,
+    weight_class: Optional[WeightClass] = None,
     hf_repo: str = "cluster-of-stars/TinyStoriesHackathon_Submissions",
 ) -> Dict[str, Any]:
     "Upload a submission to the HF dataset using environment credentials."
@@ -97,7 +106,7 @@ def upload_submission(
                             total_hours = time_until_next.seconds // 3600
                             minutes = (time_until_next.seconds % 3600) // 60
 
-                            console.print("[red]Error: You have already submitted today (AOE timezone). Only one submission is allowed per day.[/red]")  # fmt: skip
+                            console.print("\n[red]Error: You have already submitted today (AOE timezone). Only one submission is allowed per day.[/red]")  # fmt: skip
                             console.print(f"[yellow]Your previous submission: {submission}[/yellow]")
                             console.print(f"[yellow]You can submit again in {total_hours} hours and {minutes} minutes (at midnight AOE).[/yellow]")  # fmt: skip
                             raise typer.Exit(code=1)
@@ -106,7 +115,7 @@ def upload_submission(
                         continue
     except Exception as e:
         # Don't prevent submission if we can't check existing submissions
-        console.print(f"[yellow]Warning: Could not check for existing submissions: {str(e)}[/yellow]")
+        console.print(f"\n[yellow]Warning: Could not check for existing submissions: {str(e)}[/yellow]")
 
     # Read submission
     df = read_submission(file_path)
@@ -114,14 +123,43 @@ def upload_submission(
     # Validate columns - must have exactly prompt and completion columns
     expected_columns = set(["prompt", "completion"])
     if set(df.columns) != expected_columns:
-        console.print(f"[red]Error: Submission must contain exactly two columns: 'prompt' and 'completion'. Found: {', '.join(df.columns)}[/red]")  # fmt: skip
+        console.print(f"\n[red]Error: Submission must contain exactly two columns: 'prompt' and 'completion'. Found: {', '.join(df.columns)}[/red]")  # fmt: skip
         raise typer.Exit(code=1)
 
     # Validate that completions are unique
     if df["completion"].duplicated().any():
         duplicate_count = df["completion"].duplicated().sum()
-        console.print(f"[red]Error: All completions must be unique. Found {duplicate_count} duplicate completions.[/red]")
+        console.print(f"\n[red]Error: All completions must be unique. Found {duplicate_count} duplicate completions.[/red]")
         raise typer.Exit(code=1)
+
+    # Check if weight_class is provided, and if not, try to get it from existing metadata or prompt
+    metadata_remote_path = f"submissions/{username}/metadata.json"
+    existing_metadata = None
+
+    if weight_class is None:
+        # Try to get existing weight_class from metadata.json
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                api.hf_hub_download(repo_id=hf_repo, repo_type="dataset", filename=metadata_remote_path, local_dir=tmp_dir)
+                existing_metadata_path = Path(tmp_dir) / metadata_remote_path.split("/")[-1]
+                if existing_metadata_path.exists():
+                    with open(existing_metadata_path, "r") as f:
+                        existing_metadata = json.load(f)
+                        if "weight_class" in existing_metadata and existing_metadata["weight_class"]:
+                            existing_weight_class = existing_metadata["weight_class"]
+                            console.print(f"[yellow]Using existing weight class: {existing_weight_class}[/yellow]")
+                            weight_class = WeightClass(existing_weight_class)
+        except:
+            # If we can't get the metadata, we'll prompt the user
+            pass
+
+        # If still no weight_class from metadata, prompt the user
+        if weight_class is None:
+            weight_class = typer.prompt(
+                "\nSelect model weight class size (small: up to 30M, medium: up to 60M, or large: up to 120M) [small|medium|large]",
+                type=WeightClass,
+                show_choices=True,
+            )
 
     # Generate timestamp for the submission
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -133,34 +171,76 @@ def upload_submission(
         save_path = Path(temp_dir) / file_name
         # Save as CSV
         df.to_csv(save_path, index=False)
+
         # Upload to HF
         remote_path = f"submissions/{username}/{timestamp}.csv"
         # api.upload_file(path_or_fileobj=str(save_path), path_in_repo=remote_path, repo_id=hf_repo, repo_type="dataset")
 
-    return dict(participant=username, timestamp=timestamp, n_rows=len(df), remote_path=remote_path)
+        # Handle metadata.json - get existing if we don't have it yet
+        if existing_metadata is None:
+            try:
+                # Try to download existing metadata.json only if we haven't already
+                tmp_meta_path = Path(temp_dir) / "tmp_metadata.json"
+                api.hf_hub_download(repo_id=hf_repo, repo_type="dataset", filename=metadata_remote_path, local_path=str(tmp_meta_path))
+                if tmp_meta_path.exists():
+                    with open(tmp_meta_path, "r") as f:
+                        existing_metadata = json.load(f)
+            except:
+                # If metadata.json doesn't exist, create new
+                existing_metadata = {}
+
+        # Determine if we need to update metadata
+        metadata_exists = bool(existing_metadata)
+        current_weight_class = existing_metadata.get("weight_class", None) if existing_metadata else None
+        need_metadata_update = not metadata_exists or (weight_class and weight_class.value != current_weight_class)
+
+        # Update metadata with new weight_class if needed
+        metadata = existing_metadata.copy() if existing_metadata else {}
+        if weight_class and need_metadata_update:
+            metadata["weight_class"] = weight_class.value
+
+        # Only upload if metadata changed or didn't exist
+        if need_metadata_update:
+            # Write and upload metadata.json
+            metadata_path = Path(temp_dir) / "metadata.json"
+            with open(metadata_path, "w") as f:
+                json.dump(metadata, f)
+
+            console.print(f"\n[yellow]Updating metadata with weight class: {metadata.get('weight_class')}[/yellow]")
+            api.upload_file(path_or_fileobj=str(metadata_path), path_in_repo=metadata_remote_path, repo_id=hf_repo, repo_type="dataset")
+
+    return dict(
+        participant=username,
+        timestamp=timestamp,
+        n_rows=len(df),
+        remote_path=remote_path,
+        metadata=metadata,
+    )
 
 
 @app.command()
 def submit(
-    file_path: Annotated[Path, typer.Argument(help="Path to the submission file")],
-    submission_name: Annotated[Optional[str], typer.Option(help="Name of the submission")] = None,
-):
+    submission_path: Annotated[Path, typer.Option(help="Path to the submission file", show_default=False)],
+    submission_name: Annotated[Optional[str], typer.Option(help="Optional user friendly name of the submission ")] = None,
+    weight_class: Annotated[Optional[WeightClass], typer.Option(help="Model weight class size (small: up to 30M, medium: up to 60M, or large: up to 120M). If provided this will update the current model weight class.")] = None,
+):  # fmt: skip
     "Submit a file to the TinyStories hackathon."
     try:
-        if not file_path.exists():
-            console.print(f"[red]Error: File {file_path} not found[/red]")
+        if not submission_path.exists():
+            console.print(f"\n[red]Error: File {submission_path} not found[/red]")
             return
 
-        console.print(f"[yellow]Uploading submission from {file_path}...[/yellow]")
-        result = upload_submission(file_path, submission_name)
-        console.print("[green]Submission successful![/green]")
-        console.print(f"Username: [blue]{result['participant']}[/blue]")
+        console.print(f"[yellow]Uploading submission from {submission_path}...[/yellow]")
+        result = upload_submission(submission_path, submission_name, weight_class)
+        console.print("\n[green]Submission successful![/green]")
+        console.print(f"\nUsername: [blue]{result['participant']}[/blue]")
         console.print(f"Timestamp: [blue]{result['timestamp']}[/blue]")
         console.print(f"Rows submitted: [blue]{result['n_rows']}[/blue]")
         console.print(f"Stored at: [blue]{result['remote_path']}[/blue]")
+        console.print(f"Weight class: [blue]{result['metadata']['weight_class']}[/blue]")
 
     except Exception as e:
-        console.print(f"[red]Error: {str(e)}[/red]")
+        console.print(f"\n[red]Error: {str(e)}[/red]")
 
 
 @app.command()
