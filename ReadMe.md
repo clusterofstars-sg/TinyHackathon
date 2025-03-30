@@ -30,9 +30,9 @@ If not, follow the [Hugging Face instructions to log in](https://huggingface.co/
 
 1. Download evaluation dataset:
 ```bash
-python submission.py download_eval --output-file PATH_TO_FILE
+python submission.py download-eval --output-file PATH_TO_FILE
 # or
-uv run submission.py download_eval --output-file PATH_TO_FILE
+uv run submission.py download-eval --output-file PATH_TO_FILE
 ```
 
 The evaluation dataset is has two columns: `prompt` and `completion`. Pass the prompt to your TinyStories model and generate the completion. Only subit the model's output, not the prompt to the completion column.
