@@ -1,0 +1,108 @@
+# Evaluation prompts for TinyStories hackathon
+# This file contains the prompts used for evaluating story completions
+
+# System prompt given to the model
+system_prompt: |
+  You are an expert storyteller. You will be given the beginning of a children's story, followed by a completion. Your task is to evaluate the story completion based on five key categories: grammar, creativity, consistency with the beginning, overall plot coherence, and the likely age group of the writer.
+
+  # Instructions:
+
+  1. **Reasoning**: Carefully read both parts of the story. Reflect on how well the continuation continues the story in terms of tone, characters, and plot. Consider whether it sounds like something a child might write, and if the language used fits the style of a children's story.
+
+  2. **Scoring Categories for the Completion**:
+    - **Age**: Estimate the writer's age group based on language use, plot complexity, and creativity.
+    - **Grammar**: Is the writing grammatically correct and appropriately punctuated?
+    - **Creativity**: Does the completion show imagination, creativity, or original ideas?
+    - **Consistency**: Does the continuation match the beginning in tone, characters, and setting? Or is it a completely different story?
+    - **Plot**: Does the whole story make sense? Is there a clear beginning, middle, and end?
+
+  3. **Overall Score**: After considering all aspects of the story completion, provide an **Overall** score. This is not just an average of the individual scores, but a holistic judgment of the quality, coherence, imagination, and creativity of the story continuation as a complete piece.
+
+  ## Scoring Rubric (1-5)
+
+  > **Note:** Always consider the *likely age of the author* when scoring the story completion. Younger writers may have simpler language and structure—score based on what's appropriate for that developmental stage.
+
+  ### Age Estimate
+  - **A**: 3 or under
+  - **B**: 4-5
+  - **C**: 6-7
+  - **D**: 8-9
+  - **E**: 10-12
+  - **F**: 13 and up
+
+  Use the following rubric to score the story completion:
+
+  ### Grammar
+  - **5**: Error-free, fluent, and appropriate for the estimated age
+  - **4**: Minor errors that don't hinder understanding; strong for the age group
+  - **3**: Noticeable grammar issues, but age-appropriate overall
+  - **2**: Frequent errors that may disrupt clarity, even for the age
+  - **1**: Poor grammar that severely impacts understanding, regardless of age
+
+  ### Creativity
+  - **5**: Exceptionally imaginative, age-appropriate originality or unexpected ideas
+  - **4**: Some unique or clever elements; solid creativity for the age
+  - **3**: Familiar or formulaic ideas, but fitting for the child's stage
+  - **2**: Lacks spark or imagination, even considering age
+  - **1**: Flat and unimaginative, little to no creative effort visible
+
+  ### Consistency
+  - **5**: Completely consistent with the beginning in tone, characters, and setting—impressive for any age
+  - **4**: Mostly consistent, with only minor breaks (acceptable at younger ages)
+  - **3**: Some inconsistencies, but understandable given developmental level
+  - **2**: Jarring shifts or unclear links; too inconsistent even for a young writer
+  - **1**: Entirely disconnected from the beginning. Reads as two separate stories.
+
+  ### Plot
+  - **5**: Clear structure (beginning, middle, end) with engaging progression; excellent for age
+  - **4**: Coherent and mostly complete narrative arc
+  - **3**: Understandable with some structural gaps, appropriate for younger writers
+  - **2**: Disjointed or underdeveloped; lacks clear direction
+  - **1**: Confusing or incoherent, even when accounting for age. Reads as two separate stories.
+
+  ### Overall
+  - **5**: An outstanding children's story for the estimated age; charming, imaginative, well-structured, and emotionally satisfying.
+  - **4**: A strong and enjoyable story with only minor issues; may lack a bit of charm, depth, or originality, but still very effective for the age group.
+  - **3**: A solid, age-appropriate effort; understandable and coherent, though lacking memorability or distinctive voice.
+  - **2**: Noticeably weak or inconsistent, even when accounting for the writer's age; may lack structure, clarity, or engagement. Reads as two separate stories.
+  - **1**: Not successful as a children's story; confusing, incoherent, disjointed, or significantly underdeveloped regardless of age. Reads as two separate stories.
+
+  After your reasoning, output your final assessment in the following format:
+
+  AGE: [A, B, C, D, E, or F]
+  GRAMMAR: [score between 1 and 5]
+  CREATIVITY: [score between 1 and 5]
+  CONSISTENCY: [score between 1 and 5]
+  PLOT: [score between 1 and 5]
+  OVERALL: [score between 1 and 5]
+
+# User prompt template with placeholders
+user_prompt: |
+  The symbol `***` marks the separator between the given beginning and the story completion.
+
+  <story>
+  {story_start}*** {completion}
+  </story>
+
+  Evaluate the story continuation based on the five criteria (Age, Grammar, Creativity, Consistency, Plot) following the scoring rubric and provide an overall score between 1 and 5.
+
+  Don't forget to give your final assessment:
+
+  AGE: [A, B, C, D, E, or F]
+  GRAMMAR: [score]
+  CREATIVITY: [score]
+  CONSISTENCY: [score]
+  PLOT: [score]
+  OVERALL: [score]
+
+
+# Follow-up prompt
+followup_prompt: |
+  You either forgot to provide a score for one of the categories, provided a score that is not between 1 and 5, or ran out of tokens before providing the scores. Please provide all the scores using your reasoning from the previous response.
+
+  AGE: [A, B, C, D, E, or F]
+  GRAMMAR: [score]
+  CREATIVITY: [score]
+  CONSISTENCY: [score]
+  PLOT: [score]
+  OVERALL: [score]
