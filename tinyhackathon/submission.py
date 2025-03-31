@@ -263,20 +263,19 @@ def whoami():
 
 @app.command()
 def download_eval(
-    output_file: Annotated[Path, typer.Option(help="Evaluation prompts file")] = "evaluation_prompts.csv",
-    path_in_repo: Annotated[str, typer.Option(help="Path to file within the repository")] = "evaluation_prompts.csv",
     repo_id: Annotated[str, typer.Option(help="Hugging Face repository ID")] = "cluster-of-stars/tiny_stories_evaluation_prompts",
 ):  # fmt: skip
     "Download evaluation prompts for Tiny Stories hackathon"
     api = HfApi()
+    filename = "evaluation_prompts.csv"
     try:
         api.hf_hub_download(
             repo_id=repo_id,
-            filename=path_in_repo,
-            local_dir=os.path.dirname(output_file) or ".",
+            filename=filename,
+            local_dir=".",
             repo_type="dataset",
         )
-        console.print(f"[green]Successfully downloaded and saved to {output_file}[/green]")
+        console.print(f"[green]Successfully downloaded and saved to {Path(filename).absolute()}[/green]")
     except Exception as e:
         console.print(f"[red]Error: Failed to download: {str(e)}[/red]")
 
