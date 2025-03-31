@@ -68,27 +68,45 @@ def calc_scores(user_submissions):
 
 
 def write_csv(path: Path, scores: Dict[str, Dict[str, Dict[str, Any]]]):
-    """Write scores to a CSV file.
+    """Write scores to a CSV file using pandas.
 
     Args:
         path: Path to output CSV file
         scores: Dictionary containing score data
     """
-    header = ["username", "submission_id", "model_arch", "score", "item_id", "grammar", "creativity", "consistency", "plot", "overall"]
-    with open(path.as_posix(), "w", newline="") as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(header)
-        for user in scores:
-            for submission in scores[user]:
-                for model_arch in scores[user][submission]:
-                    score = scores[user][submission][model_arch]["score"]
-                    for item in scores[user][submission][model_arch]["details"]:
-                        ind_scores = [(item["scores"][h] if h in item["scores"] else "#") for h in header[5:]]
-                        writer.writerow([user, submission, model_arch, score, item["item_id"], *ind_scores])
+    # Convert nested dictionary to a list of records for DataFrame
+    records = []
+    for username in scores:
+        for submission_id in scores[username]:
+            for model_arch in scores[username][submission_id]:
+                model_data = scores[username][submission_id][model_arch]
+                score = model_data["score"]
+
+                # Add a record for each item detail
+                if "details" in model_data:
+                    for item in model_data["details"]:
+                        item_id = item["item_id"]
+                        # Create a record with all the basic info
+                        record = {
+                            "username": username,
+                            "submission_id": submission_id,
+                            "model_arch": model_arch,
+                            "score": score,
+                            "item_id": item_id,
+                        }
+                        # Add individual scores
+                        for category, value in item["scores"].items():
+                            record[category] = value
+                        records.append(record)
+
+    # Create DataFrame and save to CSV
+    df = pd.DataFrame(records)
+    df.to_csv(path, index=False)
+    console.print(f"[green]Scores written to {path}[/green]")
 
 
 def read_csv(path: str):
-    """Read scores from a CSV file.
+    """Read scores from a CSV file using pandas.
 
     Args:
         path: Path to input CSV file
@@ -96,30 +114,39 @@ def read_csv(path: str):
     Returns:
         Dictionary containing score data
     """
-    with open(path, "r") as file:
-        reader = csv.reader(file)
-        header = next(reader)
-        scores = {}
-        for item in reader:
-            (
-                user,
-                submission,
-                model_arch,
-                score,
-            ) = item[0], item[1], item[2], item[3]
-            if user not in scores:
-                scores[user] = {}
-            if submission not in scores[user]:
-                scores[user][submission] = {}
-            if model_arch not in scores[user][submission]:
-                scores[user][submission][model_arch] = {
-                    "score": float(score),
-                }
-            item_id = item[4]
-            ind_scores = {h: float(r) for h, r in zip(header[5:], item[5:]) if r != "#"}
-            if "details" not in scores[user][submission][model_arch]:
-                scores[user][submission][model_arch]["details"] = []
-            scores[user][submission][model_arch]["details"] += [{header[4]: int(item_id), "scores": ind_scores}]
+    # Read CSV into DataFrame
+    df = pd.read_csv(path)
+
+    # Initialize scores dictionary
+    scores = {}
+
+    # Group by username, submission_id, and model_arch
+    for (username, submission_id, model_arch), group in df.groupby(["username", "submission_id", "model_arch"]):
+        # Initialize nested dictionaries if they don't exist
+        if username not in scores:
+            scores[username] = {}
+        if submission_id not in scores[username]:
+            scores[username][submission_id] = {}
+
+        # Get the submission score (same for all rows in this group)
+        submission_score = group["score"].iloc[0]
+
+        # Initialize model arch data
+        scores[username][submission_id][model_arch] = {"score": submission_score, "details": []}
+
+        # Add details for each item
+        for _, row in group.iterrows():
+            # Extract score categories and values
+            score_categories = ["grammar", "creativity", "consistency", "plot", "overall"]
+            item_scores = {}
+            for category in score_categories:
+                if category in row and not pd.isna(row[category]):
+                    item_scores[category] = float(row[category])
+
+            # Add item details
+            detail = {"item_id": int(row["item_id"]), "scores": item_scores}
+            scores[username][submission_id][model_arch]["details"].append(detail)
+
     return scores
 
 
@@ -189,7 +216,7 @@ def process_scores(
     return scores, item_scores, total_score, processed_count
 
 
-def generate_model_csv(
+def generate_model_dataframe(
     username: str,
     submission_id: str,
     model_name: str,
@@ -197,7 +224,7 @@ def generate_model_csv(
     completions: List[str],
     item_scores: Dict[int, Dict[str, float]],
 ):
-    """Generate a per-model CSV for a submission.
+    """Generate a per-model Dataframe for a submission.
 
     Args:
         username: Username of the submission
