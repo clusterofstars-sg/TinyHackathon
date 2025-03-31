@@ -3,12 +3,18 @@ import datetime
 import json
 import re
 import os
+import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Annotated, Tuple, Set
 
 import pandas as pd
+import typer
+from huggingface_hub import HfApi
 from rich.console import Console
+
+# Import from submission.py for authentication
+from submission import get_hf_user
 
 console = Console()
 
@@ -26,7 +32,72 @@ class ScoreCategory(str, Enum):
     OVERALL = "OVERALL"
 
 
-def extract_scores(response):
+class UploadTracker:
+    """Tracks which files have been uploaded to avoid redundant uploads."""
+
+    def __init__(self, state_file=".upload_state.json"):
+        self.state_file = Path(state_file)
+        self.state = self._load_state()
+
+    def _load_state(self):
+        """Load saved upload state or create empty state."""
+        if self.state_file.exists():
+            try:
+                return json.loads(self.state_file.read_text())
+            except json.JSONDecodeError:
+                console.print(f"[yellow]Warning: Could not parse upload state file. Creating new state.[/yellow]")
+                return {"last_upload": {}, "last_readme_update": None}
+        return {"last_upload": {}, "last_readme_update": None}
+
+    def save_state(self):
+        """Save current state to disk."""
+        self.state_file.write_text(json.dumps(self.state, indent=2))
+
+    def should_upload_file(self, file_path: Path) -> bool:
+        """Check if file needs upload based on modification time."""
+        file_path_str = str(file_path)
+        last_upload_time = self.state["last_upload"].get(file_path_str)
+
+        if not file_path.exists():
+            return False
+
+        if last_upload_time is None:
+            return True
+
+        # Get file modification time as ISO timestamp
+        mtime = datetime.datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
+        return mtime > last_upload_time
+
+    def mark_file_uploaded(self, file_path: Path):
+        """Mark a file as uploaded with current timestamp."""
+        file_path_str = str(file_path)
+        mtime = datetime.datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
+        self.state["last_upload"][file_path_str] = mtime
+        self.save_state()
+
+    def mark_readme_updated(self):
+        """Mark the README as updated with current timestamp."""
+        self.state["last_readme_update"] = datetime.datetime.now().isoformat()
+        self.save_state()
+
+    def should_update_readme(self, min_interval_hours=12) -> bool:
+        """Check if README should be updated based on time interval."""
+        last_update = self.state.get("last_readme_update")
+        if last_update is None:
+            return True
+
+        last_update_time = datetime.datetime.fromisoformat(last_update)
+        hours_since_update = (datetime.datetime.now() - last_update_time).total_seconds() / 3600
+        return hours_since_update >= min_interval_hours
+
+
+def get_authenticated_api() -> HfApi:
+    """Get authenticated HF API instance."""
+    _, api = get_hf_user()
+    return api
+
+
+def extract_scores(response: str) -> Tuple[Dict[str, float], bool]:
     """Extract scores from the model's response.
 
     Uses regex patterns to find scores for each category in the response.
@@ -54,7 +125,7 @@ def extract_scores(response):
     return scores, success
 
 
-def write_csv(path: Path, scores: Dict[str, Dict[str, Dict[str, Any]]]):
+def write_csv(path: Path, scores: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
     """Write scores to a CSV file using pandas.
 
     Args:
@@ -92,7 +163,7 @@ def write_csv(path: Path, scores: Dict[str, Dict[str, Dict[str, Any]]]):
     console.print(f"[green]Scores written to {path}[/green]")
 
 
-def read_csv(path: str):
+def read_csv(path: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """Read scores from a CSV file using pandas.
 
     Args:
@@ -144,7 +215,7 @@ def process_scores(
     submission_id: str,
     model_arch: str,
     scores: Dict[str, Dict[str, Dict[str, Any]]],
-):
+) -> Tuple[Dict[str, Dict[str, Dict[str, Any]]], Dict[int, Dict[str, float]], float, int]:
     """Process model responses and extract scores.
 
     Extracts scores from model responses and updates the scores dictionary.
@@ -159,7 +230,7 @@ def process_scores(
         scores: Dictionary to update with extracted scores
 
     Returns:
-        Updated scores dictionary, item_scores dictionary, total_score, and processed_count
+        Tuple of (updated scores dict, item_scores dict, total_score, processed_count)
     """
     item_scores = {}
     total_score = 0
@@ -214,7 +285,7 @@ def generate_model_dataframe(
     prompts: List[str],
     completions: List[str],
     item_scores: Dict[int, Dict[str, float]],
-):
+) -> pd.DataFrame:
     """Generate a per-model DataFrame for a submission.
 
     Args:
@@ -254,7 +325,7 @@ def save_model_csv(
     item_scores: Dict[int, Dict[str, float]],
     base_dir: str = "submissions",
     overwrite: bool = False,
-):
+) -> Path:
     """Save per-model CSV for a submission.
 
     Args:
@@ -300,7 +371,7 @@ def save_model_csv(
     return csv_path
 
 
-def find_model_csvs(username: str, submission_id: str, base_dir: str = "submissions"):
+def find_model_csvs(username: str, submission_id: str, base_dir: str = "submissions") -> List[Path]:
     """Find all model CSV files for a submission.
 
     Args:
@@ -320,7 +391,7 @@ def find_model_csvs(username: str, submission_id: str, base_dir: str = "submissi
     return model_csvs
 
 
-def calculate_submission_average(username: str, submission_id: str, base_dir: str = "submissions"):
+def calculate_submission_average(username: str, submission_id: str, base_dir: str = "submissions") -> Optional[pd.DataFrame]:
     """Calculate average scores across all models for a submission.
 
     This function aggregates results from multiple model CSVs for a single submission.
@@ -382,7 +453,7 @@ def calculate_submission_average(username: str, submission_id: str, base_dir: st
     return summary_row
 
 
-def save_submission_summary(username: str, submission_id: str, base_dir: str = "submissions", overwrite: bool = False):
+def save_submission_summary(username: str, submission_id: str, base_dir: str = "submissions", overwrite: bool = False) -> Optional[Path]:
     """Generate and save a submission summary CSV.
 
     This creates a summary of scores across all models for a single submission.
@@ -428,7 +499,7 @@ def update_user_score_history(
     summary_df: pd.DataFrame,
     base_dir: str = "submissions",
     overwrite: bool = True,  # Default to overwrite for history
-):
+) -> Path:
     """Update the user's score history with this submission.
 
     This maintains a record of all submissions by a user and their scores.
@@ -824,3 +895,444 @@ def generate_and_save_all_leaderboards(base_dir: str = "submissions", output_dir
     saved_files.update(weight_class_files)
 
     return saved_files
+
+
+def upload_user_files(
+    username: str,
+    submission_id: Optional[str] = None,
+    base_dir: str = "submissions",
+    repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions",
+) -> Dict[str, int]:
+    """Upload files for a specific user and optionally a specific submission.
+
+    Args:
+        username: Username to upload files for
+        submission_id: Optional specific submission ID to upload
+        base_dir: Base directory for submissions
+        repo_id: Hugging Face repository ID
+
+    Returns:
+        Dictionary with counts of uploaded files
+    """
+    user_dir = Path(base_dir) / username
+    if not user_dir.exists():
+        console.print(f"[yellow]User directory not found: {user_dir}[/yellow]")
+        return {"uploaded": 0, "skipped": 0, "error": 0}
+
+    # Get authenticated API
+    try:
+        api = get_authenticated_api()
+    except Exception as e:
+        console.print(f"[red]Authentication error: {e}[/red]")
+        return {"uploaded": 0, "skipped": 0, "error": 1}
+
+    # Create upload tracker
+    tracker = UploadTracker()
+    results = {"uploaded": 0, "skipped": 0, "error": 0}
+
+    # Upload user metadata if it exists
+    metadata_path = user_dir / "metadata.json"
+    if metadata_path.exists() and tracker.should_upload_file(metadata_path):
+        try:
+            remote_path = f"submissions/{username}/metadata.json"
+            api.upload_file(path_or_fileobj=str(metadata_path), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
+            tracker.mark_file_uploaded(metadata_path)
+            results["uploaded"] += 1
+            console.print(f"[green]Uploaded {metadata_path} to {remote_path}[/green]")
+        except Exception as e:
+            console.print(f"[red]Error uploading {metadata_path}: {e}[/red]")
+            results["error"] += 1
+    elif metadata_path.exists():
+        results["skipped"] += 1
+
+    # Upload score history if it exists
+    history_path = user_dir / "score_history.csv"
+    if history_path.exists() and tracker.should_upload_file(history_path):
+        try:
+            remote_path = f"submissions/{username}/score_history.csv"
+            api.upload_file(path_or_fileobj=str(history_path), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
+            tracker.mark_file_uploaded(history_path)
+            results["uploaded"] += 1
+            console.print(f"[green]Uploaded {history_path} to {remote_path}[/green]")
+        except Exception as e:
+            console.print(f"[red]Error uploading {history_path}: {e}[/red]")
+            results["error"] += 1
+    elif history_path.exists():
+        results["skipped"] += 1
+
+    # Handle submission files
+    if submission_id:
+        # Upload specific submission
+        submission_dir = user_dir / submission_id
+        if submission_dir.exists():
+            results = _upload_submission_folder(api, submission_dir, username, submission_id, tracker, repo_id, results)
+    else:
+        # Upload all submissions
+        for submission_dir in user_dir.glob("*/"):
+            if submission_dir.is_dir() and submission_dir.name != "__pycache__":
+                submission_id = submission_dir.name
+                results = _upload_submission_folder(api, submission_dir, username, submission_id, tracker, repo_id, results)
+
+    return results
+
+
+def _upload_submission_folder(
+    api: HfApi, submission_dir: Path, username: str, submission_id: str, tracker: UploadTracker, repo_id: str, results: Dict[str, int]
+) -> Dict[str, int]:
+    """Helper function to upload a submission folder at once using upload_folder.
+
+    Args:
+        api: Authenticated Hugging Face API client
+        submission_dir: Directory containing submission files
+        username: Username of the submission owner
+        submission_id: ID of the submission
+        tracker: Upload tracker to avoid redundant uploads
+        repo_id: Hugging Face repository ID
+        results: Current upload metrics to update
+
+    Returns:
+        Updated upload metrics dictionary
+    """
+    # Count files to be uploaded for metrics
+    csv_files = list(submission_dir.glob("*.csv"))
+
+    # Check if any files need uploading using tracker
+    files_to_upload = [f for f in csv_files if tracker.should_upload_file(f)]
+
+    if not files_to_upload:
+        # Update skipped count
+        results["skipped"] += len(csv_files)
+        return results
+
+    try:
+        # Upload the entire submission folder at once
+        remote_path = f"submissions/{username}/{submission_id}"
+        response = api.upload_folder(folder_path=str(submission_dir), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
+
+        # Mark all files as uploaded
+        for file_path in csv_files:
+            tracker.mark_file_uploaded(file_path)
+
+        # Count newly uploaded files for metrics
+        results["uploaded"] += len(files_to_upload)
+        console.print(f"[green]Uploaded submission folder {submission_dir} to {remote_path}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error uploading submission folder {submission_dir}: {e}[/red]")
+        results["error"] += 1
+
+        # Try individual files as fallback
+        console.print(f"[yellow]Attempting individual file uploads as fallback...[/yellow]")
+        for file_path in files_to_upload:
+            try:
+                remote_file_path = f"submissions/{username}/{submission_id}/{file_path.name}"
+                api.upload_file(path_or_fileobj=str(file_path), path_in_repo=remote_file_path, repo_id=repo_id, repo_type="dataset")
+                tracker.mark_file_uploaded(file_path)
+                results["uploaded"] += 1
+                console.print(f"[green]Uploaded {file_path} to {remote_file_path}[/green]")
+            except Exception as e2:
+                console.print(f"[red]Error uploading {file_path}: {e2}[/red]")
+                results["error"] += 1
+
+    return results
+
+
+def upload_all_user_files(
+    base_dir: str = "submissions", repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions"
+) -> Dict[str, int]:
+    """Upload files for all users in the base directory.
+
+    Args:
+        base_dir: Base directory for submissions
+        repo_id: Hugging Face repository ID
+
+    Returns:
+        Dictionary with counts of uploaded files
+    """
+    base_path = Path(base_dir)
+    if not base_path.exists():
+        console.print(f"[yellow]Base directory not found: {base_path}[/yellow]")
+        return {"uploaded": 0, "skipped": 0, "error": 0}
+
+    total_results = {"uploaded": 0, "skipped": 0, "error": 0}
+
+    # Process each user directory
+    for user_dir in base_path.glob("*/"):
+        if user_dir.is_dir() and user_dir.name != "__pycache__":
+            username = user_dir.name
+            console.print(f"[blue]Processing user: {username}[/blue]")
+
+            # Upload user files
+            results = upload_user_files(username, base_dir=base_dir, repo_id=repo_id)
+
+            # Aggregate results
+            for key in total_results:
+                total_results[key] += results.get(key, 0)
+
+    console.print(
+        f"[blue]Upload summary: {total_results['uploaded']} files uploaded, "
+        f"{total_results['skipped']} files skipped, "
+        f"{total_results['error']} errors[/blue]"
+    )
+
+    return total_results
+
+
+def upload_leaderboards(leaderboard_dir: str = ".", repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions") -> Dict[str, int]:
+    """Upload leaderboard files to the repository.
+
+    Args:
+        leaderboard_dir: Directory containing leaderboard files
+        repo_id: Hugging Face repository ID
+
+    Returns:
+        Dictionary with counts of uploaded files
+    """
+    leaderboard_path = Path(leaderboard_dir)
+    if not leaderboard_path.exists():
+        console.print(f"[yellow]Leaderboard directory not found: {leaderboard_path}[/yellow]")
+        return {"uploaded": 0, "skipped": 0, "error": 0}
+
+    # Get authenticated API
+    try:
+        api = get_authenticated_api()
+    except Exception as e:
+        console.print(f"[red]Authentication error: {e}[/red]")
+        return {"uploaded": 0, "skipped": 0, "error": 1}
+
+    # Create upload tracker
+    tracker = UploadTracker()
+    results = {"uploaded": 0, "skipped": 0, "error": 0}
+
+    # Find all leaderboard files
+    leaderboard_patterns = [
+        "leaderboard_global.*",
+        "leaderboard_weight_class.*",
+        "leaderboard_small.*",
+        "leaderboard_medium.*",
+        "leaderboard_large.*",
+    ]
+
+    # Gather leaderboard files
+    leaderboard_files = []
+    for pattern in leaderboard_patterns:
+        leaderboard_files.extend(leaderboard_path.glob(pattern))
+
+    # Check if there are any files to upload
+    files_to_upload = [f for f in leaderboard_files if tracker.should_upload_file(f)]
+
+    if not files_to_upload:
+        results["skipped"] = len(leaderboard_files)
+        console.print(f"[yellow]All {len(leaderboard_files)} leaderboard files already up to date[/yellow]")
+        return results
+
+    try:
+        # Create a temporary directory with symlinks to only the leaderboard files
+        # This allows upload_folder to work with just the leaderboard files
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = Path(temp_dir)
+
+            # Create symlinks to leaderboard files
+            for file_path in leaderboard_files:
+                # Create a symlink in the temp directory
+                temp_file_path = temp_dir_path / file_path.name
+                if not temp_file_path.exists():
+                    os.symlink(file_path.absolute(), temp_file_path)
+
+            # Upload the entire temp directory (containing only leaderboard files)
+            response = api.upload_folder(
+                folder_path=str(temp_dir_path),
+                path_in_repo="",  # Upload to root
+                repo_id=repo_id,
+                repo_type="dataset",
+            )
+
+            # Mark all files as uploaded
+            for file_path in leaderboard_files:
+                tracker.mark_file_uploaded(file_path)
+
+            # Count uploaded files
+            results["uploaded"] = len(files_to_upload)
+            console.print(f"[green]Uploaded {len(files_to_upload)} leaderboard files[/green]")
+
+    except Exception as e:
+        console.print(f"[red]Error uploading leaderboard files: {e}[/red]")
+        console.print(f"[yellow]Falling back to individual file uploads...[/yellow]")
+
+        # Fall back to individual uploads
+        for file_path in files_to_upload:
+            if tracker.should_upload_file(file_path):
+                try:
+                    remote_path = f"{file_path.name}"
+                    api.upload_file(path_or_fileobj=str(file_path), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
+                    tracker.mark_file_uploaded(file_path)
+                    results["uploaded"] += 1
+                    console.print(f"[green]Uploaded {file_path} to {remote_path}[/green]")
+                except Exception as e2:
+                    console.print(f"[red]Error uploading {file_path}: {e2}[/red]")
+                    results["error"] += 1
+            else:
+                results["skipped"] += 1
+
+    console.print(
+        f"[blue]Leaderboard upload summary: {results['uploaded']} files uploaded, "
+        f"{results['skipped']} files skipped, "
+        f"{results['error']} errors[/blue]"
+    )
+
+    return results
+
+
+def generate_readme_leaderboard_section(leaderboard_dir: str = ".") -> str:
+    """Generate a markdown section for the README with leaderboard highlights.
+
+    Args:
+        leaderboard_dir: Directory containing leaderboard files
+
+    Returns:
+        Markdown content for README
+    """
+    # Look for global leaderboard markdown file
+    global_md_path = Path(leaderboard_dir) / "leaderboard_global.md"
+    if not global_md_path.exists():
+        console.print(f"[yellow]Global leaderboard markdown not found: {global_md_path}[/yellow]")
+        return "<!-- No leaderboard data available -->"
+
+    # Read the global leaderboard content
+    global_md_content = global_md_path.read_text()
+
+    # Generate timestamp
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    # Build markdown content
+    md_content = [
+        "<!-- LEADERBOARD_START -->",
+        f"## Leaderboard (Updated: {timestamp})",
+        "",
+        "### Global Standings",
+        "",
+        # Include only the table portion of the global leaderboard (skip the header)
+        global_md_content.split("\n\n", 1)[1] if "\n\n" in global_md_content else global_md_content,
+        "",
+        "### Weight Class Standings",
+        "",
+        "For detailed weight class standings, see:",
+        "",
+    ]
+
+    # Add links to weight class leaderboards
+    for weight_class in ["small", "medium", "large"]:
+        wc_md_path = Path(leaderboard_dir) / f"leaderboard_{weight_class}.md"
+        if wc_md_path.exists():
+            md_content.append(f"- [{weight_class.capitalize()} Weight Class]({wc_md_path.name})")
+
+    md_content.extend(["", "<!-- LEADERBOARD_END -->"])
+
+    return "\n".join(md_content)
+
+
+def update_repository_readme(leaderboard_dir: str = ".", repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions") -> bool:
+    """Update the repository README with leaderboard information.
+
+    Args:
+        leaderboard_dir: Directory containing leaderboard files
+        repo_id: Hugging Face repository ID
+
+    Returns:
+        Boolean indicating success
+    """
+    # Get authenticated API
+    try:
+        api = get_authenticated_api()
+    except Exception as e:
+        console.print(f"[red]Authentication error: {e}[/red]")
+        return False
+
+    # Create tracker and check if update is needed
+    tracker = UploadTracker()
+    if not tracker.should_update_readme():
+        console.print(f"[yellow]README was updated recently. Skipping update.[/yellow]")
+        return True
+
+    # Create temporary directory for README work
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+
+        # Try to download existing README
+        readme_path = temp_dir_path / "README.md"
+        try:
+            api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename="README.md", local_dir=temp_dir)
+        except Exception as e:
+            console.print(f"[yellow]Could not download existing README: {e}. Creating new README.[/yellow]")
+            readme_path.write_text("# TinyStories Hackathon Submissions\n\n")
+
+        # Read existing README
+        readme_content = readme_path.read_text() if readme_path.exists() else ""
+
+        # Generate new leaderboard section
+        leaderboard_section = generate_readme_leaderboard_section(leaderboard_dir)
+
+        # Replace or append leaderboard section
+        leaderboard_start = "<!-- LEADERBOARD_START -->"
+        leaderboard_end = "<!-- LEADERBOARD_END -->"
+
+        if leaderboard_start in readme_content and leaderboard_end in readme_content:
+            # Replace existing section
+            start_pos = readme_content.find(leaderboard_start)
+            end_pos = readme_content.find(leaderboard_end) + len(leaderboard_end)
+            new_readme = readme_content[:start_pos] + leaderboard_section + readme_content[end_pos:]
+        else:
+            # Append to README
+            new_readme = readme_content.rstrip() + "\n\n" + leaderboard_section
+
+        # Write updated README
+        readme_path.write_text(new_readme)
+
+        # Upload README back to repository
+        try:
+            api.upload_file(path_or_fileobj=str(readme_path), path_in_repo="README.md", repo_id=repo_id, repo_type="dataset")
+            tracker.mark_readme_updated()
+            console.print(f"[green]Updated README.md with leaderboard information[/green]")
+            return True
+        except Exception as e:
+            console.print(f"[red]Error uploading README: {e}[/red]")
+            return False
+
+
+# Add Typer CLI
+app = typer.Typer()
+
+
+@app.command()
+def leaderboard(
+    submissions_dir: Annotated[str, typer.Option(help="Directory containing submission files")] = "submissions",
+    output_dir: Annotated[str, typer.Option(help="Directory to save leaderboard files")] = ".",
+    upload: Annotated[bool, typer.Option(help="Upload results to HF repository")] = False,
+    update_readme: Annotated[bool, typer.Option(help="Update README with leaderboards (requires upload=True)")] = False,
+):
+    """Generate leaderboards and optionally upload results to the repository."""
+    # Always generate leaderboards
+    console.print("[yellow]Generating leaderboards...[/yellow]")
+    leaderboard_files = generate_and_save_all_leaderboards(base_dir=submissions_dir, output_dir=output_dir)
+
+    if not upload:
+        console.print("[green]Leaderboards generated successfully.[/green]")
+        for file_type, file_path in leaderboard_files.items():
+            console.print(f"  - {file_type}: {file_path}")
+        return
+
+    # Upload functionality
+    console.print("[yellow]Uploading user files...[/yellow]")
+    upload_all_user_files(base_dir=submissions_dir)
+
+    console.print("[yellow]Uploading leaderboards...[/yellow]")
+    upload_leaderboards(leaderboard_dir=output_dir)
+
+    if update_readme and upload:
+        console.print("[yellow]Updating README with leaderboards...[/yellow]")
+        update_repository_readme(leaderboard_dir=output_dir)
+
+    console.print("[green]All operations completed successfully![/green]")
+
+
+if __name__ == "__main__":
+    app()
