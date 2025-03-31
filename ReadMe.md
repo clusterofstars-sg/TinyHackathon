@@ -41,12 +41,14 @@ Each prompt is repeated four times, generate four unique completions for each pr
 
 2. Submit your file to the hackathon:
 ```bash
-python submission.py submit PATH_TO_FILE [--submission-name NAME] --submit
+python submission.py submit --submission-path PATH_TO_FILE [--submission-name NAME] --submit
 # or
-uv run submission.py submit PATH_TO_FILE [--submission-name NAME] --submit
+uv run submission.py submit --submission-path PATH_TO_FILE [--submission-name NAME] --submit
 ```
 
 By default, the submission script will submit to the test dataset which will not be scored. For a realsubmission, use the `--submit` flag.
+
+Set `submission-name` to optionally give your submission a human-friendly identifier. If not set, it will only have a timestamp.
 
 > Note: You are limited to one submission per day.
 
