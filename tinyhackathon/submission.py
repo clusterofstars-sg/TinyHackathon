@@ -10,10 +10,11 @@
 # ]
 # ///
 
+import json
 import os
 import re
 import tempfile
-import json
+import time
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -107,12 +108,15 @@ def upload_submission(
                             minutes = (time_until_next.seconds % 3600) // 60
 
                             console.print("\n[red]Error: You have already submitted today (AOE timezone). Only one submission is allowed per day.[/red]")  # fmt: skip
-                            console.print(f"[yellow]Your previous submission: {submission}[/yellow]")
-                            console.print(f"[yellow]You can submit again in {total_hours} hours and {minutes} minutes (at midnight AOE).[/yellow]")  # fmt: skip
-                            raise typer.Exit(code=1)
+                            console.print(f"\n[yellow]Your previous submission: {submission}[/yellow]")
+                            console.print(f"[yellow]You can submit again in {total_hours} hours and {minutes} minutes (at midnight AOE).[/yellow]\n")  # fmt: skip
+                            raise typer.Exit()
                     except ValueError:
                         # Skip files with invalid timestamp format
                         continue
+    except typer.Exit:
+        # Re-raise typer.Exit exceptions to ensure they propagate properly
+        raise
     except Exception as e:
         # Don't prevent submission if we can't check existing submissions
         console.print(f"\n[yellow]Warning: Could not check for existing submissions: {str(e)}[/yellow]")
@@ -174,7 +178,7 @@ def upload_submission(
 
         # Upload to HF
         remote_path = f"submissions/{username}/{timestamp}.csv"
-        # api.upload_file(path_or_fileobj=str(save_path), path_in_repo=remote_path, repo_id=hf_repo, repo_type="dataset")
+        api.upload_file(path_or_fileobj=str(save_path), path_in_repo=remote_path, repo_id=hf_repo, repo_type="dataset")
 
         # Handle metadata.json - get existing if we don't have it yet
         if existing_metadata is None:
@@ -223,6 +227,7 @@ def submit(
     submission_path: Annotated[Path, typer.Option(help="Path to the submission file", show_default=False)],
     submission_name: Annotated[Optional[str], typer.Option(help="Optional user friendly name of the submission ")] = None,
     weight_class: Annotated[Optional[WeightClass], typer.Option(help="Model weight class size (small: up to 30M, medium: up to 60M, or large: up to 120M). If provided this will update the current model weight class.")] = None,
+    submit: Annotated[bool, typer.Option("--submit/--test",help="Upload submission (--submit) or test submission (--test). Default's to test submission.")] = False,
 ):  # fmt: skip
     "Submit a file to the TinyStories hackathon."
     try:
@@ -230,15 +235,29 @@ def submit(
             console.print(f"\n[red]Error: File {submission_path} not found[/red]")
             return
 
-        console.print(f"[yellow]Uploading submission from {submission_path}...[/yellow]")
-        result = upload_submission(submission_path, submission_name, weight_class)
-        console.print("\n[green]Submission successful![/green]")
+        if not submit:
+            console.print("[yellow]Test mode - submission will be uploaded to test dataset in 5 seconds...[/yellow]")
+            for i in range(5, 0, -1):
+                console.print(f"[yellow]    {i} seconds remaining...[/yellow]")
+                time.sleep(1)
+
+        if submit:
+            hf_repo = "cluster-of-stars/TinyStoriesHackathon_Submissions"
+        else:
+            hf_repo = "cluster-of-stars/TinyStoriesHackathon_Submissions_Test"
+
+        console.print(f"\n[yellow]Uploading {'test' if not submit else ''} submission from {submission_path}...[/yellow]")
+        result = upload_submission(submission_path, submission_name, weight_class, hf_repo)
+        console.print(f"\n[green]{'Test submission' if not submit else 'Submission'} successful![/green]")
         console.print(f"\nUsername: [blue]{result['participant']}[/blue]")
         console.print(f"Timestamp: [blue]{result['timestamp']}[/blue]")
         console.print(f"Rows submitted: [blue]{result['n_rows']}[/blue]")
         console.print(f"Stored at: [blue]{result['remote_path']}[/blue]")
-        console.print(f"Weight class: [blue]{result['metadata']['weight_class']}[/blue]")
+        console.print(f"Weight class: [blue]{result['metadata']['weight_class']}[/blue]\n")
 
+    except typer.Exit:
+        # Just re-raise typer.Exit without additional error message
+        raise
     except Exception as e:
         console.print(f"\n[red]Error: {str(e)}[/red]")
 
