@@ -46,6 +46,8 @@ python submission.py submit PATH_TO_FILE [--submission-name NAME] --submit
 uv run submission.py submit PATH_TO_FILE [--submission-name NAME] --submit
 ```
 
+where `submission-name` is an optional human-readable name for the submission.
+
 By default, the submission script will submit to the test dataset which will not be scored. For a realsubmission, use the `--submit` flag.
 
 > Note: You are limited to one submission per day.
