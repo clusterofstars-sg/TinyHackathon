@@ -54,87 +54,6 @@ def extract_scores(response):
     return scores, success
 
 
-def calc_scores(user_submissions):
-    """Calculate best scores for a user across all their submissions.
-
-    This function is used for the global leaderboard to find a user's best submission.
-    It's different from calculate_submission_average, which handles a single submission.
-
-    Args:
-        user_submissions: Dictionary of user's submissions with scores
-
-    Returns:
-        Tuple containing (best_score, avg_individual_score, avg_consistency_score)
-    """
-    if not user_submissions:
-        return (0.0, 0.0, 0.0)
-
-    # Create lists to hold submission data
-    submission_data = []
-
-    # Process each submission
-    for submission_id, submission in user_submissions.items():
-        # Extract all model scores for this submission
-        model_scores = [model_data["score"] for model_data in submission.values()]
-        if not model_scores:
-            continue
-
-        # Calculate average score across all models for this submission
-        avg_score = sum(model_scores) / len(model_scores)
-
-        # Extract all item details for all models in this submission
-        all_details = []
-        for model_data in submission.values():
-            if "details" in model_data:
-                all_details.extend(model_data["details"])
-
-        if not all_details:
-            continue
-
-        # Create a DataFrame from item details
-        details_data = []
-        for detail in all_details:
-            if "scores" in detail:
-                row = {"item_id": detail.get("item_id", 0)}
-                row.update(detail["scores"])
-                details_data.append(row)
-
-        if not details_data:
-            continue
-
-        details_df = pd.DataFrame(details_data)
-
-        # Calculate average individual score (grammar, creativity, consistency, plot)
-        # Note: This excludes 'overall' which is handled separately
-        idv_headers = ["grammar", "creativity", "consistency", "plot"]
-        available_headers = [h for h in idv_headers if h in details_df.columns]
-
-        if available_headers:
-            avg_individual = details_df[available_headers].mean().mean()
-        else:
-            avg_individual = 0.0
-
-        # Calculate average consistency score if available
-        avg_consistency = details_df["consistency"].mean() if "consistency" in details_df.columns else 0.0
-
-        # Add to submission data
-        submission_data.append(
-            {"submission_id": submission_id, "avg_score": avg_score, "avg_individual": avg_individual, "avg_consistency": avg_consistency}
-        )
-
-    if not submission_data:
-        return (0.0, 0.0, 0.0)
-
-    # Convert to DataFrame for easier analysis
-    submissions_df = pd.DataFrame(submission_data)
-
-    # Find the submission with the highest average score
-    best_idx = submissions_df["avg_score"].idxmax()
-    best_submission = submissions_df.iloc[best_idx]
-
-    return (best_submission["avg_score"], best_submission["avg_individual"], best_submission["avg_consistency"])
-
-
 def write_csv(path: Path, scores: Dict[str, Dict[str, Dict[str, Any]]]):
     """Write scores to a CSV file using pandas.
 
@@ -205,7 +124,7 @@ def read_csv(path: str):
         # Add details for each item
         for _, row in group.iterrows():
             # Extract score categories and values
-            score_categories = ["grammar", "creativity", "consistency", "plot", "overall"]
+            score_categories = [cat.lower() for cat in ScoreCategory]
             item_scores = {}
             for category in score_categories:
                 if category in row and not pd.isna(row[category]):
@@ -229,7 +148,7 @@ def process_scores(
     """Process model responses and extract scores.
 
     Extracts scores from model responses and updates the scores dictionary.
-    The scores are stored with lowercase category names (e.g., 'grammar', 'creativity').
+    The scores are stored with lowercase category names from the ScoreCategory enum.
 
     Args:
         responses: Dictionary mapping item IDs to model responses
@@ -271,8 +190,9 @@ def process_scores(
             # Store scores
             item_scores[idx] = extracted_scores
 
-            # Update total score (using 'overall' category)
-            total_score += extracted_scores.get("overall", 0)
+            # Update total score (using the ScoreCategory.OVERALL category)
+            overall_category = ScoreCategory.OVERALL.lower()
+            total_score += extracted_scores.get(overall_category, 0)
             processed_count += 1
 
             # Add to details
@@ -404,7 +324,7 @@ def calculate_submission_average(username: str, submission_id: str, base_dir: st
     """Calculate average scores across all models for a submission.
 
     This function aggregates results from multiple model CSVs for a single submission.
-    It's different from calc_scores, which finds the best submission across all of a user's submissions.
+    It finds and combines all model evaluation results for one specific submission.
 
     Args:
         username: Username of the submission
@@ -557,3 +477,350 @@ def update_user_score_history(
     console.print(f"[green]User score history updated: {history_path}[/green]")
 
     return history_path
+
+
+def read_user_metadata(username: str, base_dir: str = "submissions") -> str:
+    """Read a user's metadata to get their weight class.
+
+    Args:
+        username: The username to look up
+        base_dir: Base directory for submissions
+
+    Returns:
+        Weight class (small, medium, or large), defaults to "small" if not found
+    """
+    user_dir = Path(base_dir) / username
+    metadata_path = user_dir / "metadata.json"
+
+    # Default to small if metadata doesn't exist
+    if not metadata_path.exists():
+        return "small"
+
+    try:
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
+
+        # Get weight class or default to small
+        weight_class = metadata.get("weight_class", "small")
+
+        # Validate weight class
+        if weight_class not in ["small", "medium", "large"]:
+            console.print(f"[yellow]Invalid weight class: {weight_class} for user {username}, defaulting to 'small'[/yellow]")
+            return "small"
+
+        return weight_class
+    except Exception as e:
+        console.print(f"[red]Error reading metadata for {username}: {e}[/red]")
+        return "small"
+
+
+def find_all_user_histories(base_dir: str = "submissions") -> List[Path]:
+    """Find all user score history files.
+
+    Args:
+        base_dir: Base directory for submissions
+
+    Returns:
+        List of paths to score_history.csv files
+    """
+    base_path = Path(base_dir)
+    if not base_path.exists():
+        return []
+
+    # Find all score_history.csv files
+    history_files = list(base_path.glob("*/score_history.csv"))
+    return history_files
+
+
+def generate_global_leaderboard(base_dir: str = "submissions") -> pd.DataFrame:
+    """Generate a global leaderboard across all users.
+
+    Args:
+        base_dir: Base directory for submissions
+
+    Returns:
+        DataFrame containing the global leaderboard
+    """
+    # Find all user history files
+    history_files = find_all_user_histories(base_dir)
+
+    if not history_files:
+        console.print(f"[yellow]No user history files found in {base_dir}[/yellow]")
+        return pd.DataFrame()
+
+    # Load and combine all histories
+    user_data = []
+
+    for history_path in history_files:
+        try:
+            # Get username from directory path
+            username = history_path.parent.name
+
+            # Read history file
+            history = pd.read_csv(history_path)
+
+            if history.empty:
+                continue
+
+            # For each user, find their best submission based on ScoreCategory.OVERALL score
+            overall_score_category = ScoreCategory.OVERALL.lower()
+            if overall_score_category in history.columns:
+                best_submission = history.loc[history[overall_score_category].idxmax()]
+            else:
+                # Fall back to first submission if no overall score
+                best_submission = history.iloc[0]
+
+            # Get individual category scores
+            category_scores = {}
+            for category in ScoreCategory:
+                category_lower = category.lower()
+                if category_lower in best_submission:
+                    category_scores[category_lower] = best_submission[category_lower]
+                else:
+                    category_scores[category_lower] = 0.0
+
+            # Calculate total number of submissions for this user
+            submission_count = len(history)
+
+            # Get submission timestamp
+            timestamp = best_submission["timestamp"] if "timestamp" in best_submission else ""
+
+            # Get submission_id
+            submission_id = best_submission["submission_id"] if "submission_id" in best_submission else ""
+
+            # Get weight class
+            weight_class = read_user_metadata(username, base_dir)
+
+            # Create user entry
+            user_entry = {
+                "username": username,
+                "submission_id": submission_id,
+                "submission_count": submission_count,
+                "submission_date": timestamp,
+                "weight_class": weight_class,
+                **category_scores,  # Add all category scores individually
+            }
+
+            user_data.append(user_entry)
+
+        except Exception as e:
+            console.print(f"[red]Error processing history for {history_path.parent.name}: {e}[/red]")
+            continue
+
+    if not user_data:
+        return pd.DataFrame()
+
+    # Create leaderboard DataFrame
+    leaderboard = pd.DataFrame(user_data)
+
+    # Sort by overall score descending
+    leaderboard = leaderboard.sort_values(by=ScoreCategory.OVERALL.lower(), ascending=False).reset_index(drop=True)
+
+    # Add rank column
+    leaderboard.insert(0, "rank", range(1, len(leaderboard) + 1))
+
+    return leaderboard
+
+
+def save_global_leaderboard(leaderboard: pd.DataFrame, base_dir: str = ".") -> Dict[str, Path]:
+    """Save the global leaderboard to CSV and Markdown.
+
+    Args:
+        leaderboard: DataFrame containing the global leaderboard
+        base_dir: Base directory to save the leaderboard files
+
+    Returns:
+        Dictionary with paths to the saved files
+    """
+    base_path = Path(base_dir)
+
+    if leaderboard.empty:
+        console.print("[yellow]Empty leaderboard, not saving[/yellow]")
+        return {}
+
+    saved_files = {}
+
+    # Save CSV
+    csv_path = base_path / "leaderboard_global.csv"
+    leaderboard.to_csv(csv_path, index=False)
+    saved_files["csv"] = csv_path
+    console.print(f"[green]Global leaderboard saved to {csv_path}[/green]")
+
+    # Save Markdown
+    md_path = base_path / "leaderboard_global.md"
+
+    # Define column order with overall first, then other categories
+    score_categories = [ScoreCategory.OVERALL.lower()]
+    for category in ScoreCategory:
+        if category.lower() != ScoreCategory.OVERALL.lower():
+            score_categories.append(category.lower())
+
+    # Create a new DataFrame with columns in the desired order
+    display_cols = ["rank", "username"] + score_categories + ["submission_count", "submission_date"]
+    display_df = leaderboard[display_cols].copy()
+
+    # Format floating point columns
+    for col in score_categories:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].map(lambda x: f"{x:.2f}")
+
+    # Create markdown with a header
+    md_content = "# Global Leaderboard\n\n"
+    md_content += display_df.to_markdown(index=False, tablefmt="pipe")
+
+    with open(md_path, "w") as f:
+        f.write(md_content)
+
+    saved_files["md"] = md_path
+    console.print(f"[green]Global leaderboard markdown saved to {md_path}[/green]")
+
+    return saved_files
+
+
+def generate_weight_class_leaderboards(leaderboard: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    """Generate separate leaderboards for each weight class.
+
+    Args:
+        leaderboard: The global leaderboard DataFrame
+
+    Returns:
+        Dictionary mapping weight class to its leaderboard DataFrame
+    """
+    if leaderboard.empty:
+        return {}
+
+    # Ensure weight_class column exists
+    if "weight_class" not in leaderboard.columns:
+        console.print("[yellow]Leaderboard missing weight_class column, cannot generate weight class leaderboards[/yellow]")
+        return {}
+
+    # Group by weight class
+    weight_class_leaderboards = {}
+
+    for weight_class in ["small", "medium", "large"]:
+        # Filter the leaderboard by weight class
+        class_leaderboard = leaderboard[leaderboard["weight_class"] == weight_class].copy()
+
+        if class_leaderboard.empty:
+            console.print(f"[yellow]No entries for weight class '{weight_class}'[/yellow]")
+            continue
+
+        # Rerank within this weight class
+        class_leaderboard = class_leaderboard.sort_values(by=ScoreCategory.OVERALL.lower(), ascending=False).reset_index(drop=True)
+        class_leaderboard["rank"] = range(1, len(class_leaderboard) + 1)
+
+        weight_class_leaderboards[weight_class] = class_leaderboard
+
+    return weight_class_leaderboards
+
+
+def save_weight_class_leaderboards(weight_class_leaderboards: Dict[str, pd.DataFrame], base_dir: str = ".") -> Dict[str, Path]:
+    """Save weight class leaderboards to CSV and Markdown.
+
+    Args:
+        weight_class_leaderboards: Dictionary of weight class leaderboards
+        base_dir: Base directory to save the leaderboard files
+
+    Returns:
+        Dictionary with paths to the saved files
+    """
+    base_path = Path(base_dir)
+    saved_files = {}
+
+    if not weight_class_leaderboards:
+        console.print("[yellow]No weight class leaderboards to save[/yellow]")
+        return saved_files
+
+    # Create combined weight class DataFrame
+    all_classes = []
+    for weight_class, leaderboard in weight_class_leaderboards.items():
+        if not leaderboard.empty:
+            all_classes.append(leaderboard)
+
+    if all_classes:
+        combined = pd.concat(all_classes, ignore_index=True)
+
+        # Save combined CSV
+        combined_path = base_path / "leaderboard_weight_class.csv"
+        combined.to_csv(combined_path, index=False)
+        saved_files["combined_csv"] = combined_path
+        console.print(f"[green]Combined weight class leaderboard saved to {combined_path}[/green]")
+
+    # Define column order with overall first, then other categories
+    score_categories = [ScoreCategory.OVERALL.lower()]
+    for category in ScoreCategory:
+        if category.lower() != ScoreCategory.OVERALL.lower():
+            score_categories.append(category.lower())
+
+    # Save individual weight class files
+    for weight_class, leaderboard in weight_class_leaderboards.items():
+        if leaderboard.empty:
+            continue
+
+        # Save CSV
+        csv_path = base_path / f"leaderboard_{weight_class}.csv"
+        leaderboard.to_csv(csv_path, index=False)
+        saved_files[f"{weight_class}_csv"] = csv_path
+        console.print(f"[green]{weight_class.capitalize()} weight class leaderboard saved to {csv_path}[/green]")
+
+        # Save Markdown
+        md_path = base_path / f"leaderboard_{weight_class}.md"
+
+        # Create a new DataFrame with columns in the desired order
+        display_cols = ["rank", "username"] + score_categories + ["submission_count", "submission_date"]
+        display_df = leaderboard[display_cols].copy()
+
+        # Format floating point columns
+        for col in score_categories:
+            if col in display_df.columns:
+                display_df[col] = display_df[col].map(lambda x: f"{x:.2f}")
+
+        # Create markdown with a header
+        md_content = f"# {weight_class.capitalize()} Weight Class Leaderboard\n\n"
+        md_content += display_df.to_markdown(index=False, tablefmt="pipe")
+
+        with open(md_path, "w") as f:
+            f.write(md_content)
+
+        saved_files[f"{weight_class}_md"] = md_path
+        console.print(f"[green]{weight_class.capitalize()} weight class markdown saved to {md_path}[/green]")
+
+    return saved_files
+
+
+def generate_and_save_all_leaderboards(base_dir: str = "submissions", output_dir: str = ".") -> Dict[str, Path]:
+    """Generate and save all leaderboards in one function.
+
+    This is a convenience function that combines all leaderboard generation
+    and saving into a single call.
+
+    Args:
+        base_dir: Base directory for submissions
+        output_dir: Directory to save leaderboard files
+
+    Returns:
+        Dictionary with paths to all saved files
+    """
+    # Create output directory if it doesn't exist
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Generate global leaderboard
+    global_leaderboard = generate_global_leaderboard(base_dir)
+
+    if global_leaderboard.empty:
+        console.print("[yellow]No data for leaderboards[/yellow]")
+        return {}
+
+    # Save global leaderboard
+    saved_files = save_global_leaderboard(global_leaderboard, output_dir)
+
+    # Generate weight class leaderboards
+    weight_class_leaderboards = generate_weight_class_leaderboards(global_leaderboard)
+
+    # Save weight class leaderboards
+    weight_class_files = save_weight_class_leaderboards(weight_class_leaderboards, output_dir)
+
+    # Combine all saved files
+    saved_files.update(weight_class_files)
+
+    return saved_files
