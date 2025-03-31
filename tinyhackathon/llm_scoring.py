@@ -20,16 +20,18 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn
 from rich.table import Table
 from submission import get_hf_user
 
+# Import scoring functions
+from scoring import (
+    ScoreCategory,
+    calc_scores,
+    extract_scores,
+    process_scores,
+    read_csv,
+    write_csv,
+)
+
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 console = Console()
-
-
-class ScoreCategory(str, Enum):
-    GRAMMAR = "GRAMMAR"
-    CREATIVITY = "CREATIVITY"
-    CONSISTENCY = "CONSISTENCY"
-    PLOT = "PLOT"
-    OVERALL = "OVERALL"
 
 
 def load_submissions(submissions_dir: Union[str, Path]) -> List[Path]:
@@ -207,53 +209,6 @@ def evaluate_submissions(
     return scores, leaderboard
 
 
-def calc_scores(user_submissions):
-    "Calculate scores for single user"
-    idv_headers = ["grammar", "creativity", "consistency", "plot"]
-    avg_scores = []
-    avg_idv_scores = []
-    avg_consistency_scores = []
-    for submission in user_submissions.values():
-        model_scores = [model_arch["score"] for model_arch in submission.values()]
-        avg_scores += [sum(model_scores) / len(model_scores)]
-        item_scores = [model_arch["details"] for model_arch in submission.values()]
-        item_scores = sum(item_scores, [])  # concat arrays for all models
-
-        def filter_by_header(scores: Dict[str, float]):
-            return [scores[header] for header in idv_headers if header in scores]
-
-        def mean(scores: Dict[str, float]):
-            return sum(filter_by_header(scores)) / len(filter_by_header(scores))
-
-        idv_avg_scores = [mean(item["scores"]) for item in item_scores]
-        avg_idv_scores += [sum(idv_avg_scores) / len(idv_avg_scores)]
-        consistency_scores = [model_arch["details"] for model_arch in submission.values()]
-        consistency_scores = sum(consistency_scores, [])  # concat arrays for all models
-        consistency_scores = [item["scores"]["consistency"] for item in consistency_scores]
-        avg_consistency_scores += [sum(consistency_scores) / len(consistency_scores)]
-    max_score = max(avg_scores)
-    max_index = avg_scores.index(max_score)
-    max_idv_score = avg_idv_scores[max_index]
-    max_consistency_score = avg_consistency_scores[max_index]
-    return (max_score, max_idv_score, max_consistency_score)
-
-
-def extract_scores(response):
-    "Extract scores from the model's response"
-    scores = {}
-    # Extract individual category scores
-    for category in ScoreCategory:
-        pattern = f"{category.value}: (\\d+(?:\\.\\d+)?)"
-        # Find all matches and use the last one if multiple exist
-        matches = re.findall(pattern, response, re.IGNORECASE)
-        if matches:
-            scores[category.lower()] = float(matches[-1])
-
-    # Check if all required categories have scores
-    success = all(category.lower() in scores for category in ScoreCategory)
-    return scores, success
-
-
 def run_batch_evaluation(
     generator: ExLlamaV2DynamicGenerator,
     jobs_data: List[Dict[str, Any]],
@@ -397,15 +352,10 @@ def eval_completions(
         # Process all responses and check for missing scores
         console.print("[yellow]Processing responses and calculating scores...[/yellow]")
 
-        # Initialize details list if needed
-        if "details" not in scores[username][submission_id][model_arch]:
-            scores[username][submission_id][model_arch]["details"] = []
-
-        # Prepare data structures
+        # Extract responses and check which need follow-up
         responses = {}
         followup_responses = {}
         metadata = {}
-        item_scores = {}
         items_needing_followup = set()
 
         # Extract responses and check which need follow-up
@@ -425,16 +375,12 @@ def eval_completions(
                     items_needing_followup.add(idx)
                     console.print(f"[yellow]Item {idx} missing scores, will re-prompt[/yellow]")
 
-                # Store scores (may be updated later if follow-up is needed)
-                item_scores[idx] = extracted_scores
-
             except Exception as e:
                 console.print(f"[red]Error extracting score from response for item {idx}: {str(e)}[/red]")
                 items_needing_followup.add(idx)
 
         # Handle follow-up prompts if needed
         follow_up_count = len(items_needing_followup)
-        success_count = 0
 
         if follow_up_count > 0:
             console.print(f"[yellow]Re-prompting {follow_up_count} items with missing scores...[/yellow]")
@@ -501,25 +447,15 @@ def eval_completions(
                 # Store follow-up response separately
                 followup_responses[original_idx] = followup_response
 
-                try:
-                    extracted_scores, success = extract_scores(followup_response)
-
-                    for key, value in list(extracted_scores.items()):
-                        extracted_scores[key] = min(10, max(1, value))
-
-                    if success:
-                        success_count += 1
-                        # Update with successfully extracted scores
-                        item_scores[original_idx] = extracted_scores
-
-                except Exception as e:
-                    console.print(f"[red]Error extracting score from follow-up response for item {original_idx}: {str(e)}[/red]")
-
-            console.print(f"[green]Successfully retrieved scores for {success_count}/{follow_up_count} items after re-prompting[/green]")
-
-        # Update scores and prepare logs
-        total_score = 0
-        processed_count = 0
+        # Process all responses and extract scores
+        scores, item_scores, total_score, processed_count = process_scores(
+            responses,
+            followup_responses,
+            username,
+            submission_id,
+            model_arch,
+            scores,
+        )
 
         # Log prompts and responses if log_file is provided
         if log_file:
@@ -530,17 +466,9 @@ def eval_completions(
                 "evaluations": [],
             }
 
-        # Process each response and store final scores
-        for idx in range(len(prompts)):
-            if idx in item_scores:
-                # Store the score
-                details_item = {"item_id": idx, "scores": item_scores[idx]}
-                scores[username][submission_id][model_arch]["details"].append(details_item)
-                total_score += item_scores[idx].get("overall", 0)
-                processed_count += 1
-
-                # Add to log if enabled
-                if log_file:
+            # Add each evaluation to the log
+            for idx in range(len(prompts)):
+                if idx in item_scores:
                     log_item = {
                         "item_id": idx,
                         "prompt": prompts_log.get(idx, ""),
@@ -565,8 +493,6 @@ def eval_completions(
 
                     log_data["evaluations"].append(log_item)
 
-        # Save logs if enabled
-        if log_file and processed_count > 0:
             # Ensure log directory exists
             log_file.parent.mkdir(exist_ok=True, parents=True)
 
@@ -586,59 +512,18 @@ def eval_completions(
 
         # Final update
         if processed_count > 0:
-            avg_score = total_score / processed_count
-            scores[username][submission_id][model_arch]["score"] = avg_score
             write_csv(output_file, scores)
-            console.print(f"[green]Completed processing {processed_count} responses with final avg score: {avg_score:.2f}[/green]")
+            console.print(
+                f"[green]Completed processing {processed_count} responses with final avg score: {scores[username][submission_id][model_arch]['score']:.2f}[/green]"
+            )
             if follow_up_count > 0:
+                success_count = len([idx for idx in items_needing_followup if idx in item_scores])
                 console.print(f"[blue]Re-prompted {follow_up_count} items, successfully retrieved scores for {success_count} items[/blue]")
 
     except Exception as e:
         console.print(f"[red]Error in eval_completions: {str(e)}[/red]")
         traceback.print_exc()
 
-    return scores
-
-
-def write_csv(path: Path, scores: Dict[str, Dict[str, Dict[str, Any]]]):
-    header = ["username", "submission_id", "model_arch", "score", "item_id", "grammar", "creativity", "consistency", "plot", "overall"]
-    with open(path.as_posix(), "w", newline="") as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(header)
-        for user in scores:
-            for submission in scores[user]:
-                for model_arch in scores[user][submission]:
-                    score = scores[user][submission][model_arch]["score"]
-                    for item in scores[user][submission][model_arch]["details"]:
-                        ind_scores = [(item["scores"][h] if h in item["scores"] else "#") for h in header[5:]]
-                        writer.writerow([user, submission, model_arch, score, item["item_id"], *ind_scores])
-
-
-def read_csv(path: str):
-    with open(path, "r") as file:
-        reader = csv.reader(file)
-        header = next(reader)
-        scores = {}
-        for item in reader:
-            (
-                user,
-                submission,
-                model_arch,
-                score,
-            ) = item[0], item[1], item[2], item[3]
-            if user not in scores:
-                scores[user] = {}
-            if submission not in scores[user]:
-                scores[user][submission] = {}
-            if model_arch not in scores[user][submission]:
-                scores[user][submission][model_arch] = {
-                    "score": float(score),
-                }
-            item_id = item[4]
-            ind_scores = {h: float(r) for h, r in zip(header[5:], item[5:]) if r != "#"}
-            if "details" not in scores[user][submission][model_arch]:
-                scores[user][submission][model_arch]["details"] = []
-            scores[user][submission][model_arch]["details"] += [{header[4]: int(item_id), "scores": ind_scores}]
     return scores
 
 
