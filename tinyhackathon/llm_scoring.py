@@ -110,12 +110,10 @@ def process_submission(
 
     try:
         df = pd.read_csv(submission_file)
+        df = df[df.index % 20 == 3].copy()
         prompts = df["prompt"].tolist()
         completions = df["completion"].tolist()
 
-        if sample is not None:
-            prompts = prompts[:sample]
-            completions = completions[:sample]
 
         if username not in scores:
             scores[username] = {}
@@ -703,7 +701,7 @@ def evaluate(
 
 
 def download_new_submissions(
-    dataset_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions", output_dir: Union[str, Path] = "downloaded_submissions"
+    dataset_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions_Test", output_dir: Union[str, Path] = "downloaded_submissions"
 ) -> List[Dict[str, Any]]:
     "Download all new submissions from HF dataset."
     # Get HF API
