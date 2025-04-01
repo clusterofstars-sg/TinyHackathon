@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Log Viewer - Home{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <h1>Log Viewer</h1>
+        <p class="lead">Select a user to view their logs</p>
+
+        {% if users %}
+        <div class="row">
+            {% for user in users %}
+            <div class="col-md-4 mb-4">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">{{ user }}</h5>
+                        <a href="/logs/{{ user }}" class="btn btn-primary">View Logs</a>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="alert alert-info">
+            No users found with logs.
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
