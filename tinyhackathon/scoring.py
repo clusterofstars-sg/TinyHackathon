@@ -300,9 +300,36 @@ def download_new_submissions(
     # Get all files in the dataset that match our pattern
     files = api.list_repo_files(repo_id=dataset_id, repo_type="dataset")
     submission_files = [f for f in files if f.startswith("submissions/") and f.endswith(".csv")]
+    metadata_files = [f for f in files if f.startswith("submissions/") and f.endswith("metadata.json")]
 
     # Download new submissions
     new_files = []
+
+    # Process all metadata files first
+    for remote_path in metadata_files:
+        # Extract username
+        parts = remote_path.split("/")
+        if len(parts) != 3 or parts[2] != "metadata.json":
+            continue
+
+        username = parts[1]
+
+        # Create user directory
+        user_dir = output_dir / username
+        user_dir.mkdir(exist_ok=True)
+
+        # Download metadata file
+        local_path = user_dir / "metadata.json"
+        console.print(f"Downloading metadata [yellow]{remote_path}[/yellow] to [blue]{local_path}[/blue]")
+
+        # Download to the correct path
+        downloaded_path = api.hf_hub_download(repo_id=dataset_id, repo_type="dataset", filename=remote_path, local_dir=output_dir)
+
+        # Move file to the correct location if needed
+        if Path(downloaded_path) != local_path:
+            Path(downloaded_path).rename(local_path)
+
+    # Now process all submission files
     for remote_path in submission_files:
         if remote_path in processed:
             continue
@@ -839,11 +866,30 @@ def read_user_metadata(username: str, base_dir: str = "submissions") -> str:
     Returns:
         Weight class (small, medium, or large), defaults to "small" if not found
     """
+    # First check the scores directory (base_dir)
     user_dir = Path(base_dir) / username
     metadata_path = user_dir / "metadata.json"
 
+    # If not found in scores directory, check downloaded submissions directory
+    if not metadata_path.exists():
+        # Detect if we're using test or production mode based on base_dir
+        is_test_mode = "test" in base_dir.lower()
+
+        # Determine the correct downloaded submissions directory
+        if is_test_mode:
+            downloads_dir = Path("downloaded_submissions_test")
+        else:
+            downloads_dir = Path("downloaded_submissions")
+
+        # Look for metadata in downloads directory
+        downloads_metadata_path = downloads_dir / username / "metadata.json"
+        if downloads_metadata_path.exists():
+            metadata_path = downloads_metadata_path
+            console.print(f"[blue]Found metadata.json in downloads directory for {username}[/blue]")
+
     # Default to small if metadata doesn't exist
     if not metadata_path.exists():
+        console.print(f"[yellow]No metadata.json found for {username}, defaulting to 'small' weight class[/yellow]")
         return "small"
 
     try:
@@ -858,6 +904,7 @@ def read_user_metadata(username: str, base_dir: str = "submissions") -> str:
             console.print(f"[yellow]Invalid weight class: {weight_class} for user {username}, defaulting to 'small'[/yellow]")
             return "small"
 
+        console.print(f"[green]Using weight class '{weight_class}' for user {username}[/green]")
         return weight_class
     except Exception as e:
         console.print(f"[red]Error reading metadata for {username}: {e}[/red]")
@@ -1112,6 +1159,37 @@ def save_weight_class_leaderboards(weight_class_leaderboards: Dict[str, pd.DataF
         leaderboard.to_csv(csv_path, index=False)
         saved_files[f"{weight_class}_csv"] = csv_path
         console.print(f"[green]{weight_class.capitalize()} weight class leaderboard saved to {csv_path}[/green]")
+
+        # Also save as Markdown file
+        md_path = base_path / f"leaderboard_{weight_class}.md"
+
+        # Define column order with overall first, then other categories
+        score_categories = [ScoreCategory.OVERALL.lower()]
+        for category in ScoreCategory:
+            if category.lower() != ScoreCategory.OVERALL.lower():
+                score_categories.append(category.lower())
+
+        # Create a new DataFrame with columns in the desired order
+        display_cols = ["rank", "username"] + score_categories + ["submission_count", "submission_date"]
+
+        # Filter to only include columns that exist in the leaderboard
+        display_cols = [col for col in display_cols if col in leaderboard.columns]
+        display_df = leaderboard[display_cols].copy()
+
+        # Format floating point columns
+        for col in score_categories:
+            if col in display_df.columns:
+                display_df[col] = display_df[col].map(lambda x: f"{x:.2f}")
+
+        # Create markdown with a header
+        md_content = f"# {weight_class.capitalize()} Weight Class Leaderboard\n\n"
+        md_content += display_df.to_markdown(index=False, tablefmt="pipe")
+
+        with open(md_path, "w") as f:
+            f.write(md_content)
+
+        saved_files[f"{weight_class}_md"] = md_path
+        console.print(f"[green]{weight_class.capitalize()} weight class markdown saved to {md_path}[/green]")
 
     return saved_files
 
@@ -1476,23 +1554,52 @@ def generate_readme_leaderboard_section(leaderboard_dir: str = "leaderboards") -
         "",
     ]
 
-    # Add weight class tables directly instead of links
+    # Add weight class tables by reading directly from CSV files
     for weight_class in ["small", "medium", "large"]:
-        wc_md_path = Path(leaderboard_dir) / f"leaderboard_{weight_class}.md"
-        if wc_md_path.exists():
-            # Read the weight class leaderboard content
-            wc_md_content = wc_md_path.read_text()
+        csv_path = Path(leaderboard_dir) / f"leaderboard_{weight_class}.csv"
+        if csv_path.exists():
+            try:
+                # Read the CSV file
+                df = pd.read_csv(csv_path)
+                if df.empty:
+                    continue
 
-            # Add weight class header and content
-            md_content.extend(
-                [
-                    f"#### {weight_class.capitalize()} Weight Class",
-                    "",
-                    # Include only the table portion (skip the header)
-                    wc_md_content.split("\n\n", 1)[1] if "\n\n" in wc_md_content else wc_md_content,
-                    "",
-                ]
-            )
+                # Define column order with overall first, then other categories
+                score_categories = [ScoreCategory.OVERALL.lower()]
+                for category in ScoreCategory:
+                    if category.lower() != ScoreCategory.OVERALL.lower():
+                        score_categories.append(category.lower())
+
+                # Create a new DataFrame with columns in the desired order
+                display_cols = ["rank", "username"] + score_categories + ["submission_count", "submission_date"]
+
+                # Filter to only include columns that exist in the leaderboard
+                display_cols = [col for col in display_cols if col in df.columns]
+                display_df = df[display_cols].copy()
+
+                # Format floating point columns
+                for col in score_categories:
+                    if col in display_df.columns:
+                        display_df[col] = display_df[col].map(lambda x: f"{float(x):.2f}")
+
+                # Generate the markdown table
+                table_md = display_df.to_markdown(index=False, tablefmt="pipe")
+
+                # Add weight class header and table
+                md_content.extend(
+                    [
+                        f"#### {weight_class.capitalize()} Weight Class",
+                        "",
+                        table_md,
+                        "",
+                    ]
+                )
+
+                console.print(f"[green]Added {weight_class} weight class table to README[/green]")
+            except Exception as e:
+                console.print(f"[yellow]Error generating {weight_class} weight class table: {e}[/yellow]")
+        else:
+            console.print(f"[yellow]No leaderboard CSV found for {weight_class} weight class[/yellow]")
 
     md_content.extend(["<!-- LEADERBOARD_END -->"])
 
