@@ -41,8 +41,23 @@ class ScoreCategory(str, Enum):
 class UploadTracker:
     """Tracks which files have been uploaded to avoid redundant uploads."""
 
-    def __init__(self, state_file=".upload_state.json"):
+    def __init__(self, state_file="state/upload_state.json", is_test_mode=False):
+        # If default state file is used, apply test mode suffix
+        if state_file == "state/upload_state.json" and is_test_mode:
+            state_file = "state/upload_state_test.json"
+
         self.state_file = Path(state_file)
+        # Create the state directory if it doesn't exist
+        self.state_file.parent.mkdir(exist_ok=True, parents=True)
+
+        # Check for old state file in root directory for backward compatibility
+        old_state_file = Path(".upload_state.json")
+        if old_state_file.exists() and not self.state_file.exists():
+            # Migrate state from old location to new location
+            console.print(f"[yellow]Migrating upload state from {old_state_file} to {self.state_file}[/yellow]")
+            self.state_file.parent.mkdir(exist_ok=True, parents=True)
+            old_state_file.rename(self.state_file)
+
         self.state = self._load_state()
 
     def _load_state(self):
@@ -97,14 +112,172 @@ class UploadTracker:
         return hours_since_update >= min_interval_hours
 
 
+class ScoringTracker:
+    """Tracks which submissions have been scored to avoid redundant scoring."""
+
+    def __init__(self, state_file="state/scoring_state.json", is_test_mode=False):
+        # If default state file is used, apply test mode suffix
+        if state_file == "state/scoring_state.json" and is_test_mode:
+            state_file = "state/scoring_state_test.json"
+
+        self.state_file = Path(state_file)
+        # Create the state directory if it doesn't exist
+        self.state_file.parent.mkdir(exist_ok=True, parents=True)
+
+        # Check for old state file in root directory for backward compatibility
+        old_state_file = Path(".scoring_state.json")
+        if old_state_file.exists() and not self.state_file.exists():
+            # Migrate state from old location to new location
+            console.print(f"[yellow]Migrating scoring state from {old_state_file} to {self.state_file}[/yellow]")
+            self.state_file.parent.mkdir(exist_ok=True, parents=True)
+            old_state_file.rename(self.state_file)
+
+        self.state = self._load_state()
+
+    def _load_state(self):
+        """Load saved scoring state or create empty state."""
+        if self.state_file.exists():
+            try:
+                return json.loads(self.state_file.read_text())
+            except json.JSONDecodeError:
+                console.print(f"[yellow]Warning: Could not parse scoring state file. Creating new state.[/yellow]")
+                return {"scored_submissions": {}}
+        return {"scored_submissions": {}}
+
+    def save_state(self):
+        """Save current state to disk."""
+        self.state_file.write_text(json.dumps(self.state, indent=2))
+
+    def is_submission_scored(self, username: str, submission_id: str, model_name: Optional[str] = None) -> bool:
+        """Check if a submission has already been scored.
+
+        Args:
+            username: The username of the submission
+            submission_id: The ID of the submission
+            model_name: Optional model name to check if this specific model has scored the submission
+
+        Returns:
+            True if the submission has been scored (by the specified model if model_name is provided)
+        """
+        user_submissions = self.state["scored_submissions"].get(username, {})
+
+        # If no submission entry exists, it's not scored
+        if submission_id not in user_submissions:
+            return False
+
+        # If no specific model is requested, check if any model has scored it
+        if model_name is None:
+            return bool(user_submissions.get(submission_id, {}).get("models", []))
+
+        # Check if the specific model has scored this submission
+        return model_name in user_submissions.get(submission_id, {}).get("models", [])
+
+    def get_scored_models(self, username: str, submission_id: str) -> List[str]:
+        """Get the list of models that have scored a submission.
+
+        Args:
+            username: The username of the submission
+            submission_id: The ID of the submission
+
+        Returns:
+            List of model names that have scored this submission
+        """
+        user_submissions = self.state["scored_submissions"].get(username, {})
+        return user_submissions.get(submission_id, {}).get("models", [])
+
+    def mark_submission_scored(self, username: str, submission_id: str, model_name: str):
+        """Mark a submission as scored by a specific model.
+
+        Args:
+            username: The username of the submission
+            submission_id: The ID of the submission
+            model_name: The name of the model that scored the submission
+        """
+        if username not in self.state["scored_submissions"]:
+            self.state["scored_submissions"][username] = {}
+
+        if submission_id not in self.state["scored_submissions"][username]:
+            self.state["scored_submissions"][username][submission_id] = {"timestamp": datetime.datetime.now().isoformat(), "models": []}
+
+        # Add the model to the list if it's not already there
+        models = self.state["scored_submissions"][username][submission_id].get("models", [])
+        if model_name not in models:
+            models.append(model_name)
+            self.state["scored_submissions"][username][submission_id]["models"] = models
+            self.state["scored_submissions"][username][submission_id]["timestamp"] = datetime.datetime.now().isoformat()
+
+        self.save_state()
+
+    def sync_with_repository(self, repo_id: str, api: HfApi):
+        """Sync scoring state with HF repository to find already scored submissions."""
+        try:
+            # Check for scored submissions in repository
+            files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
+
+            # Track how many new entries we found
+            new_entries = 0
+
+            # Look for submission summary files which indicate completed scoring
+            for file_path in files:
+                if "submission_summary.csv" in file_path:
+                    # Extract username and submission_id from path
+                    # Pattern: submissions/{username}/{submission_id}/submission_summary.csv
+                    parts = file_path.split("/")
+                    if len(parts) >= 4:
+                        username = parts[1]
+                        submission_id = parts[2]
+
+                        # Also check for model CSV files to determine which models have scored this
+                        model_files = [
+                            f
+                            for f in files
+                            if f.startswith(f"submissions/{username}/{submission_id}/")
+                            and f.endswith(".csv")
+                            and not f.endswith("submission_summary.csv")
+                        ]
+                        model_names = [Path(f).stem for f in model_files]
+
+                        # Mark as scored
+                        if username not in self.state["scored_submissions"]:
+                            self.state["scored_submissions"][username] = {}
+
+                        if submission_id not in self.state["scored_submissions"][username]:
+                            new_entries += 1
+                            self.state["scored_submissions"][username][submission_id] = {
+                                "timestamp": datetime.datetime.now().isoformat(),
+                                "models": model_names,
+                            }
+                        else:
+                            # Update model list for existing entries
+                            existing_models = self.state["scored_submissions"][username][submission_id].get("models", [])
+                            updated_models = list(set(existing_models + model_names))
+                            if len(updated_models) > len(existing_models):
+                                new_entries += 1
+                                self.state["scored_submissions"][username][submission_id]["models"] = updated_models
+                                self.state["scored_submissions"][username][submission_id]["timestamp"] = datetime.datetime.now().isoformat()
+
+            self.save_state()
+            if new_entries > 0:
+                console.print(
+                    f"[green]Synchronized scoring state with repository: found {new_entries} new or updated submission scores[/green]"
+                )
+            else:
+                console.print(f"[green]Scoring state synchronized with repository (no new entries found)[/green]")
+        except Exception as e:
+            console.print(f"[yellow]Could not sync scoring state with repository: {e}[/yellow]")
+
+
 def download_new_submissions(
-    dataset_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions", output_dir: Union[str, Path] = "downloaded_submissions"
+    dataset_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions",
+    output_dir: Union[str, Path] = "downloaded_submissions",
+    is_test_mode: bool = False,
 ) -> List[Dict[str, Any]]:
     """Download all new submissions from HF dataset.
 
     Args:
         dataset_id: Hugging Face dataset ID
         output_dir: Directory to save downloaded submissions
+        is_test_mode: Whether to download test submissions
 
     Returns:
         List of dictionaries with information about downloaded files
@@ -117,7 +290,8 @@ def download_new_submissions(
     output_dir.mkdir(exist_ok=True, parents=True)
 
     # Create tracking file for processed submissions
-    processed_file = output_dir / "processed.json"
+    processed_filename = "processed_test.json" if is_test_mode else "processed.json"
+    processed_file = output_dir / processed_filename
     if processed_file.exists():
         processed = set(json.loads(processed_file.read_text()))
     else:
@@ -474,75 +648,86 @@ def find_model_csvs(username: str, submission_id: str, base_dir: str = "submissi
 def calculate_submission_average(username: str, submission_id: str, base_dir: str = "submissions") -> Optional[pd.DataFrame]:
     """Calculate average scores across all models for a submission.
 
-    This function aggregates results from multiple model CSVs for a single submission.
-    It finds and combines all model evaluation results for one specific submission.
-
     Args:
         username: Username of the submission
         submission_id: ID of the submission
         base_dir: Base directory for submissions
 
     Returns:
-        DataFrame with averaged scores, or None if no model CSVs found
+        DataFrame with average scores or None if no data found
     """
-    # Find all model CSVs
+    # Find all model CSV files
     model_csvs = find_model_csvs(username, submission_id, base_dir)
-
     if not model_csvs:
-        console.print(f"[yellow]No model CSVs found for {username}/{submission_id}[/yellow]")
+        console.print(f"[yellow]No model CSV files found for {username}/{submission_id}[/yellow]")
         return None
 
-    # Load and merge all model CSVs
-    all_scores = []
-    for csv_path in model_csvs:
-        model_name = csv_path.stem
-        df = pd.read_csv(csv_path)
-        # Add model name column
-        df["model"] = model_name
-        all_scores.append(df)
+    # Prepare to collect per-model data
+    all_model_data = []
+    overall_categories = [cat.lower() for cat in ScoreCategory]
 
-    if not all_scores:
+    # Process each model file
+    for model_csv in model_csvs:
+        try:
+            model_df = pd.read_csv(model_csv)
+            model_name = model_csv.stem  # Use filename as model name
+
+            # Calculate average for each category for this model
+            model_avgs = {}
+            for category in overall_categories:
+                if category in model_df.columns:
+                    model_avgs[category] = model_df[category].mean()
+
+            # Create a row for this model
+            model_row = pd.DataFrame([model_avgs])
+            model_row["model_name"] = model_name
+            model_row["item_id"] = -1  # Use -1 to indicate this is a summary
+            model_row["username"] = username
+            model_row["submission_id"] = submission_id
+
+            all_model_data.append(model_row)
+        except Exception as e:
+            console.print(f"[yellow]Error processing {model_csv}: {e}[/yellow]")
+
+    if not all_model_data:
+        console.print(f"[yellow]No valid model data found for {username}/{submission_id}[/yellow]")
         return None
 
-    # Combine all model dataframes
-    combined_df = pd.concat(all_scores, ignore_index=True)
+    # Combine all model rows into a single DataFrame
+    summary_df = pd.concat(all_model_data, ignore_index=True)
 
-    # Get score categories - use lowercase versions of the enum values
-    score_categories = [cat.lower() for cat in ScoreCategory]
-    available_categories = [cat for cat in score_categories if cat in combined_df.columns]
-
-    if not available_categories:
-        console.print(f"[red]No score categories found in model CSVs for {username}/{submission_id}[/red]")
-        return None
-
-    # Calculate averages across all models for each item
-    avg_by_item = combined_df.groupby("item_id")[available_categories].mean().reset_index()
-
-    # Calculate overall submission average (across all items and models)
+    # Create a row for the overall average across all models
     overall_avg = {}
-    for category in available_categories:
-        overall_avg[category] = combined_df[category].mean()
+    for category in overall_categories:
+        if category in summary_df.columns:
+            overall_avg[category] = summary_df[category].mean()
 
-    # Create a summary row
-    summary_row = pd.DataFrame([overall_avg])
-    summary_row["item_id"] = -1  # Use -1 to indicate this is a summary
-    summary_row["username"] = username
-    summary_row["submission_id"] = submission_id
+    overall_row = pd.DataFrame([overall_avg])
+    overall_row["model_name"] = "average"
+    overall_row["item_id"] = -1  # Use -1 to indicate this is a summary
+    overall_row["username"] = username
+    overall_row["submission_id"] = submission_id
 
-    # Return the summary row
-    return summary_row
+    # Add the overall average row at the top
+    summary_df = pd.concat([overall_row, summary_df], ignore_index=True)
+
+    return summary_df
 
 
-def save_submission_summary(username: str, submission_id: str, base_dir: str = "submissions", overwrite: bool = False) -> Optional[Path]:
+def save_submission_summary(
+    username: str, submission_id: str, base_dir: str = "submissions", overwrite: bool = False, repo_id: str = None
+) -> Optional[Path]:
     """Generate and save a submission summary CSV.
 
-    This creates a summary of scores across all models for a single submission.
+    This creates a summary of scores for each model for a single submission.
+    The summary includes one row per model with all categories, plus an "average" row.
 
     Args:
         username: Username of the submission
         submission_id: ID of the submission
         base_dir: Base directory for submissions
         overwrite: Whether to overwrite existing summary file
+        repo_id: Optional repository ID to download existing summary from
 
     Returns:
         Path to the summary CSV if successful, None otherwise
@@ -560,14 +745,14 @@ def save_submission_summary(username: str, submission_id: str, base_dir: str = "
     # Define the summary CSV path
     summary_path = submission_dir / "submission_summary.csv"
 
-    # Check if the summary already exists and we're not overwriting
+    # Only handle existing summary if not overwriting
     if summary_path.exists() and not overwrite:
-        console.print(f"[yellow]Submission summary already exists: {summary_path}[/yellow]")
+        console.print(f"[yellow]Summary file already exists and overwrite=False: {summary_path}[/yellow]")
         return summary_path
 
     # Save the summary DataFrame
     summary_df.to_csv(summary_path, index=False)
-    action = "Updated" if summary_path.exists() and overwrite else "Saved"
+    action = "Updated" if summary_path.exists() else "Saved"
     console.print(f"[green]{action} submission summary to: {summary_path}[/green]")
 
     return summary_path
@@ -582,7 +767,8 @@ def update_user_score_history(
 ) -> Path:
     """Update the user's score history with this submission.
 
-    This maintains a record of all submissions by a user and their scores.
+    This maintains a record of all submissions by a user with their overall average scores.
+    Model-specific scores are NOT included in the history.
 
     Args:
         username: Username of the submission
@@ -600,8 +786,21 @@ def update_user_score_history(
 
     history_path = user_dir / "score_history.csv"
 
-    # Create a new history entry
-    history_entry = summary_df.copy()
+    # Use only the "average" row for the history
+    if "model_name" in summary_df.columns:
+        history_entry = summary_df[summary_df["model_name"] == "average"].copy()
+        # Remove model_name column from the history
+        if not history_entry.empty:
+            history_entry = history_entry.drop(columns=["model_name"])
+    else:
+        # For backwards compatibility
+        history_entry = summary_df.copy()
+        # Remove any model-specific columns
+        cols_to_drop = [col for col in history_entry.columns if col.endswith("_overall")]
+        if cols_to_drop:
+            history_entry = history_entry.drop(columns=cols_to_drop)
+
+    # Add timestamp
     history_entry["timestamp"] = datetime.datetime.now().isoformat()
 
     # Check if history file exists
@@ -730,6 +929,9 @@ def generate_global_leaderboard(base_dir: str = "submissions") -> pd.DataFrame:
                 else:
                     category_scores[category_lower] = 0.0
 
+            # Note: We still process model-specific scores for merging purposes,
+            # but we don't include them in the leaderboard display
+
             # Calculate total number of submissions for this user
             submission_count = len(history)
 
@@ -773,7 +975,7 @@ def generate_global_leaderboard(base_dir: str = "submissions") -> pd.DataFrame:
     return leaderboard
 
 
-def save_global_leaderboard(leaderboard: pd.DataFrame, base_dir: str = ".") -> Dict[str, Path]:
+def save_global_leaderboard(leaderboard: pd.DataFrame, base_dir: str = "leaderboards") -> Dict[str, Path]:
     """Save the global leaderboard to CSV and Markdown.
 
     Args:
@@ -808,6 +1010,9 @@ def save_global_leaderboard(leaderboard: pd.DataFrame, base_dir: str = ".") -> D
 
     # Create a new DataFrame with columns in the desired order
     display_cols = ["rank", "username"] + score_categories + ["submission_count", "submission_date"]
+
+    # Filter to only include columns that exist in the leaderboard
+    display_cols = [col for col in display_cols if col in leaderboard.columns]
     display_df = leaderboard[display_cols].copy()
 
     # Format floating point columns
@@ -865,7 +1070,7 @@ def generate_weight_class_leaderboards(leaderboard: pd.DataFrame) -> Dict[str, p
     return weight_class_leaderboards
 
 
-def save_weight_class_leaderboards(weight_class_leaderboards: Dict[str, pd.DataFrame], base_dir: str = ".") -> Dict[str, Path]:
+def save_weight_class_leaderboards(weight_class_leaderboards: Dict[str, pd.DataFrame], base_dir: str = "leaderboards") -> Dict[str, Path]:
     """Save weight class leaderboards to CSV and Markdown.
 
     Args:
@@ -897,13 +1102,7 @@ def save_weight_class_leaderboards(weight_class_leaderboards: Dict[str, pd.DataF
         saved_files["combined_csv"] = combined_path
         console.print(f"[green]Combined weight class leaderboard saved to {combined_path}[/green]")
 
-    # Define column order with overall first, then other categories
-    score_categories = [ScoreCategory.OVERALL.lower()]
-    for category in ScoreCategory:
-        if category.lower() != ScoreCategory.OVERALL.lower():
-            score_categories.append(category.lower())
-
-    # Save individual weight class files
+    # Save individual weight class CSV files (but skip the markdown files)
     for weight_class, leaderboard in weight_class_leaderboards.items():
         if leaderboard.empty:
             continue
@@ -914,32 +1113,10 @@ def save_weight_class_leaderboards(weight_class_leaderboards: Dict[str, pd.DataF
         saved_files[f"{weight_class}_csv"] = csv_path
         console.print(f"[green]{weight_class.capitalize()} weight class leaderboard saved to {csv_path}[/green]")
 
-        # Save Markdown
-        md_path = base_path / f"leaderboard_{weight_class}.md"
-
-        # Create a new DataFrame with columns in the desired order
-        display_cols = ["rank", "username"] + score_categories + ["submission_count", "submission_date"]
-        display_df = leaderboard[display_cols].copy()
-
-        # Format floating point columns
-        for col in score_categories:
-            if col in display_df.columns:
-                display_df[col] = display_df[col].map(lambda x: f"{x:.2f}")
-
-        # Create markdown with a header
-        md_content = f"# {weight_class.capitalize()} Weight Class Leaderboard\n\n"
-        md_content += display_df.to_markdown(index=False, tablefmt="pipe")
-
-        with open(md_path, "w") as f:
-            f.write(md_content)
-
-        saved_files[f"{weight_class}_md"] = md_path
-        console.print(f"[green]{weight_class.capitalize()} weight class markdown saved to {md_path}[/green]")
-
     return saved_files
 
 
-def generate_and_save_all_leaderboards(base_dir: str = "submissions", output_dir: str = ".") -> pd.DataFrame:
+def generate_and_save_all_leaderboards(base_dir: str = "submissions", output_dir: str = "leaderboards") -> pd.DataFrame:
     """Generate and save all leaderboards in one function.
 
     This is a convenience function that combines all leaderboard generation
@@ -1007,7 +1184,8 @@ def upload_user_files(
         return {"uploaded": 0, "skipped": 0, "error": 1}
 
     # Create upload tracker
-    tracker = UploadTracker()
+    is_test_mode = "Test" in repo_id
+    tracker = UploadTracker(is_test_mode=is_test_mode)
     results = {"uploaded": 0, "skipped": 0, "error": 0}
 
     # Upload user metadata if it exists
@@ -1155,7 +1333,9 @@ def upload_all_user_files(base_dir: str = "submissions", repo_id: str = "cluster
     return total_results
 
 
-def upload_leaderboards(leaderboard_dir: str = ".", repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Scores") -> Dict[str, int]:
+def upload_leaderboards(
+    leaderboard_dir: str = "leaderboards", repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Scores"
+) -> Dict[str, int]:
     """Upload leaderboard files to the repository.
 
     Args:
@@ -1178,7 +1358,8 @@ def upload_leaderboards(leaderboard_dir: str = ".", repo_id: str = "cluster-of-s
         return {"uploaded": 0, "skipped": 0, "error": 1}
 
     # Create upload tracker
-    tracker = UploadTracker()
+    is_test_mode = "Test" in repo_id
+    tracker = UploadTracker(is_test_mode=is_test_mode)
     results = {"uploaded": 0, "skipped": 0, "error": 0}
 
     # Find all leaderboard files
@@ -1260,7 +1441,7 @@ def upload_leaderboards(leaderboard_dir: str = ".", repo_id: str = "cluster-of-s
     return results
 
 
-def generate_readme_leaderboard_section(leaderboard_dir: str = ".") -> str:
+def generate_readme_leaderboard_section(leaderboard_dir: str = "leaderboards") -> str:
     """Generate a markdown section for the README with leaderboard highlights.
 
     Args:
@@ -1293,27 +1474,40 @@ def generate_readme_leaderboard_section(leaderboard_dir: str = ".") -> str:
         "",
         "### Weight Class Standings",
         "",
-        "For detailed weight class standings, see:",
-        "",
     ]
 
-    # Add links to weight class leaderboards
+    # Add weight class tables directly instead of links
     for weight_class in ["small", "medium", "large"]:
         wc_md_path = Path(leaderboard_dir) / f"leaderboard_{weight_class}.md"
         if wc_md_path.exists():
-            md_content.append(f"- [{weight_class.capitalize()} Weight Class]({wc_md_path.name})")
+            # Read the weight class leaderboard content
+            wc_md_content = wc_md_path.read_text()
 
-    md_content.extend(["", "<!-- LEADERBOARD_END -->"])
+            # Add weight class header and content
+            md_content.extend(
+                [
+                    f"#### {weight_class.capitalize()} Weight Class",
+                    "",
+                    # Include only the table portion (skip the header)
+                    wc_md_content.split("\n\n", 1)[1] if "\n\n" in wc_md_content else wc_md_content,
+                    "",
+                ]
+            )
+
+    md_content.extend(["<!-- LEADERBOARD_END -->"])
 
     return "\n".join(md_content)
 
 
-def update_repository_readme(leaderboard_dir: str = ".", repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Scores") -> bool:
+def update_repository_readme(
+    leaderboard_dir: str = "leaderboards", repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Scores", force_update: bool = False
+) -> bool:
     """Update the repository README with leaderboard information.
 
     Args:
         leaderboard_dir: Directory containing leaderboard files
         repo_id: Hugging Face repository ID
+        force_update: If True, update README regardless of when it was last updated
 
     Returns:
         Boolean indicating success
@@ -1325,9 +1519,10 @@ def update_repository_readme(leaderboard_dir: str = ".", repo_id: str = "cluster
         console.print(f"[red]Authentication error: {e}[/red]")
         return False
 
-    # Create tracker and check if update is needed
-    tracker = UploadTracker()
-    if not tracker.should_update_readme():
+    # Create tracker and check if update is needed (unless forced)
+    is_test_mode = "Test" in repo_id
+    tracker = UploadTracker(is_test_mode=is_test_mode)
+    if not force_update and not tracker.should_update_readme():
         console.print(f"[yellow]README was updated recently. Skipping update.[/yellow]")
         return True
 
@@ -1414,14 +1609,15 @@ app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pret
 
 @app.command()
 def run_scoring(
-    model_dir: str = typer.Option(..., help="Directory containing the model files"),
+    model_dir: Optional[str] = typer.Option(None, help="Directory containing the model files (deprecated, use model_dirs)"),
+    model_dirs: Optional[List[str]] = typer.Option(None, help="List of directories containing the model files to use as judges"),
     submissions_dir: Optional[Path] = typer.Option(None, help="Directory containing submissions"),
     scores_dir: Optional[Path] = typer.Option(None, help="Directory to save scoring results"),
     max_new_tokens: int = typer.Option(1024, help="Maximum tokens to generate"),
     temperature: float = typer.Option(1.0, help="Temperature for generation"),
     top_p: float = typer.Option(1.0, help="Top-p sampling value"),
     batch_size: int = typer.Option(128, help="Batch size for inference"),
-    cache_size: int = typer.Option(1024 * 52, help="Cache size in tokens"),
+    cache_size: int = typer.Option(1024 * 50, help="Cache size in tokens"),
     log_prompts: bool = typer.Option(False, help="Log prompts and responses"),
     upload: bool = typer.Option(False, help="Upload results to HF repo"),
     prompt_file: str = typer.Option("prompts/simple_prompt.yaml", help="Path to prompt file"),
@@ -1431,6 +1627,27 @@ def run_scoring(
     test_samples: Optional[int] = typer.Option(None, help="Number of test samples to score"),
 ):  # fmt: skip
     """Run the scoring process, downloading new submissions and evaluating them."""
+
+    # Handle backward compatibility for model_dir vs model_dirs
+    if model_dirs is None:
+        if model_dir is None:
+            console.print("[red]Error: At least one model directory must be provided via --model-dir or --model-dirs[/red]")
+            return
+        model_dirs = [model_dir]
+        console.print("[yellow]Warning: Using deprecated --model-dir parameter. Please use --model-dirs in the future.[/yellow]")
+    elif model_dir is not None:
+        # Both were provided, prioritize model_dirs but warn
+        console.print("[yellow]Warning: Both --model-dir and --model-dirs provided. Using --model-dirs and ignoring --model-dir.[/yellow]")
+
+    # Validate that model directories exist
+    for directory in model_dirs:
+        if not os.path.isdir(directory):
+            console.print(f"[red]Error: Model directory not found: {directory}[/red]")
+            return
+
+    # Extract model names (use directory name)
+    model_names = [os.path.basename(os.path.normpath(d)) for d in model_dirs]
+    console.print(f"[blue]Using {len(model_names)} judging models: {', '.join(model_names)}[/blue]")
 
     # Resolve which mode to use for inputs and outputs
     # If specific overrides aren't provided, follow the main mode
@@ -1477,11 +1694,20 @@ def run_scoring(
 
     # Download new submissions
     console.print(f"[yellow]Downloading new submissions from {submission_repo_id}...[/yellow]")
-    new_submissions = download_new_submissions(dataset_id=submission_repo_id, output_dir=submission_dir)
+    new_submissions = download_new_submissions(dataset_id=submission_repo_id, output_dir=submission_dir, is_test_mode=use_test_sub)
     console.print(f"[green]Found {len(new_submissions)} new or updated submissions[/green]")
 
-    # Determine which submissions need scoring
-    unscored_files = []
+    # Initialize scoring tracker and sync with repository if uploading
+    scoring_tracker = ScoringTracker(is_test_mode=use_test_score)
+    if upload:
+        try:
+            api = get_authenticated_api()
+            scoring_tracker.sync_with_repository(output_repo_id, api)
+        except Exception as e:
+            console.print(f"[yellow]Could not authenticate to sync scoring state: {e}[/yellow]")
+
+    # Determine which submissions need scoring for each model
+    unscored_files_by_model = {model_name: [] for model_name in model_names}
     Path(submission_dir).mkdir(exist_ok=True, parents=True)
     Path(scores_dir_path).mkdir(exist_ok=True, parents=True)
 
@@ -1500,45 +1726,124 @@ def run_scoring(
 
             username = user_dir.name
             submission_id = csv_file.stem
-            summary_path = Path(scores_dir_path) / username / f"{submission_id}" / "submission_summary.csv"
 
-            if not summary_path.exists():
-                unscored_files.append(
-                    {
-                        "username": username,
-                        "submission_id": submission_id,
-                        "csv_path": csv_file,
-                    }
-                )
+            # Check which models need to score this submission
+            for model_name in model_names:
+                # Check if this model has already scored this submission
+                if not scoring_tracker.is_submission_scored(username, submission_id, model_name):
+                    unscored_files_by_model[model_name].append(
+                        {
+                            "username": username,
+                            "submission_id": submission_id,
+                            "csv_path": csv_file,
+                        }
+                    )
 
     console.print("[green]Completed scanning for unscored submissions[/green]")
-    console.print(f"[green]Found {len(unscored_files)} submissions needing scoring[/green]")
 
-    if not unscored_files:
+    # Print a summary of what needs to be scored
+    for model_name, unscored_files in unscored_files_by_model.items():
+        console.print(f"[green]Model {model_name}: Found {len(unscored_files)} submissions needing scoring[/green]")
+
+    # Check if there's anything to score
+    total_unscored = sum(len(files) for files in unscored_files_by_model.values())
+    if total_unscored == 0:
         console.print("[yellow]No submissions to score. Exiting.[/yellow]")
         return
 
-    # Process all submissions together
-    all_csv_paths = [item["csv_path"] for item in unscored_files]
-    console.print(f"[yellow]Processing {len(all_csv_paths)} submissions...[/yellow]")
+    # Process each model separately
+    for model_idx, model_name in enumerate(model_names):
+        model_dir = model_dirs[model_idx]
+        unscored_files = unscored_files_by_model[model_name]
 
-    if test_samples:
-        console.print(f"[yellow]Limiting to {test_samples} samples per submission for testing[/yellow]")
+        if not unscored_files:
+            console.print(f"[yellow]No unscored submissions for model {model_name}. Skipping.[/yellow]")
+            continue
 
-    all_scores = llm_scoring.score_submission(
-        submission_file=all_csv_paths,
-        model_dir=model_dir,
-        temperature=temperature,
-        top_p=top_p,
-        max_new_tokens=max_new_tokens,
-        batch_size=batch_size,
-        cache_size=cache_size,
-        log_prompts=log_prompts,
-        prompt_file=prompt_file,
-        sample=test_samples,  # Pass the test_samples parameter
-    )
+        console.print(f"[yellow]Processing {len(unscored_files)} submissions with model {model_name}...[/yellow]")
 
-    # Process and save results
+        # Get CSV paths for this model's unscored submissions
+        all_csv_paths = [item["csv_path"] for item in unscored_files]
+
+        if test_samples:
+            console.print(f"[yellow]Limiting to {test_samples} samples per submission for testing[/yellow]")
+
+        # Score submissions with this model
+        all_scores = llm_scoring.score_submission(
+            submission_file=all_csv_paths,
+            model_dir=model_dir,
+            temperature=temperature,
+            top_p=top_p,
+            max_new_tokens=max_new_tokens,
+            batch_size=batch_size,
+            cache_size=cache_size,
+            log_prompts=log_prompts,
+            prompt_file=prompt_file,
+            sample=test_samples,  # Pass the test_samples parameter
+        )
+
+        # Process and save results for this model
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"[green]Saving scoring results for model {model_name}...", total=len(unscored_files))
+
+            for item in unscored_files:
+                username = item["username"]
+                submission_id = item["submission_id"]
+                csv_path = item["csv_path"]
+
+                if username in all_scores and submission_id in all_scores[username]:
+                    # Read original submission to get prompts and completions
+                    df = pd.read_csv(csv_path)
+                    prompts = df["prompt"].tolist()
+                    completions = df["completion"].tolist()
+
+                    # Extract scores for this submission
+                    submission_scores = all_scores[username][submission_id]
+
+                    # Get this model's results
+                    current_model_name = list(submission_scores.keys())[0]  # We'll rename this to our model_name
+                    item_scores = submission_scores[current_model_name]["details"]
+
+                    # Create a dictionary of item_id to scores
+                    item_scores_dict = {entry["item_id"]: entry["scores"] for entry in item_scores}
+
+                    # Save model CSV with our defined model_name
+                    save_model_csv(
+                        username=username,
+                        submission_id=submission_id,
+                        model_name=model_name,  # Use our defined model name
+                        prompts=prompts,
+                        completions=completions,
+                        item_scores=item_scores_dict,
+                        base_dir=scores_dir_path,
+                        overwrite=True,
+                    )
+
+                    # Mark this model as having scored this submission
+                    scoring_tracker.mark_submission_scored(username, submission_id, model_name)
+
+                progress.update(task, advance=1)
+
+        console.print(f"[green]Completed scoring with model {model_name}[/green]")
+
+    # After all models have scored, generate/update submission summaries
+    console.print("[yellow]Generating submission summaries...[/yellow]")
+
+    # Find all unique submissions that were scored
+    all_scored_submissions = set()
+    for model_name in model_names:
+        for item in unscored_files_by_model[model_name]:
+            all_scored_submissions.add((item["username"], item["submission_id"]))
+
+    # Generate summaries for each submission
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -1548,59 +1853,28 @@ def run_scoring(
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("[green]Saving scoring results...", total=len(unscored_files))
+        task = progress.add_task("[green]Generating submission summaries...", total=len(all_scored_submissions))
 
-        for item in unscored_files:
-            username = item["username"]
-            submission_id = item["submission_id"]
-            csv_path = item["csv_path"]
+        for username, submission_id in all_scored_submissions:
+            # Save submission summary
+            summary_path = save_submission_summary(
+                username=username,
+                submission_id=submission_id,
+                base_dir=scores_dir_path,
+                overwrite=True,
+                repo_id=output_repo_id if upload else None,
+            )
 
-            if username in all_scores and submission_id in all_scores[username]:
-                # Read original submission to get prompts and completions
-                df = pd.read_csv(csv_path)
-                prompts = df["prompt"].tolist()
-                completions = df["completion"].tolist()
-
-                # Extract scores for this submission
-                submission_scores = all_scores[username][submission_id]
-
-                # Get the first model's results
-                model_name = list(submission_scores.keys())[0]
-                item_scores = submission_scores[model_name]["details"]
-
-                # Create a dictionary of item_id to scores
-                item_scores_dict = {entry["item_id"]: entry["scores"] for entry in item_scores}
-
-                # Save model CSV
-                save_model_csv(
+            # Update user score history if summary was created
+            if summary_path:
+                summary_df = pd.read_csv(summary_path)
+                update_user_score_history(
                     username=username,
                     submission_id=submission_id,
-                    model_name=model_name,
-                    prompts=prompts,
-                    completions=completions,
-                    item_scores=item_scores_dict,
+                    summary_df=summary_df,
                     base_dir=scores_dir_path,
                     overwrite=True,
                 )
-
-                # Save submission summary
-                summary_path = save_submission_summary(
-                    username=username,
-                    submission_id=submission_id,
-                    base_dir=scores_dir_path,
-                    overwrite=True,
-                )
-
-                # Update user score history if summary was created
-                if summary_path:
-                    summary_df = pd.read_csv(summary_path)
-                    update_user_score_history(
-                        username=username,
-                        submission_id=submission_id,
-                        summary_df=summary_df,
-                        base_dir=scores_dir_path,
-                        overwrite=True,
-                    )
 
             progress.update(task, advance=1)
 
@@ -1615,18 +1889,18 @@ def run_scoring(
 
         # Upload user files
         user_upload_results = upload_all_user_files(base_dir=scores_dir_path, repo_id=output_repo_id)
-        console.print(f"[green]Uploaded {user_upload_results.get('files', 0)} user files[/green]")
+        console.print(f"[green]Uploaded {user_upload_results.get('uploaded', 0)} user files[/green]")
 
         # Upload leaderboards
         leaderboard_upload_results = upload_leaderboards(repo_id=output_repo_id)
-        console.print(f"[green]Uploaded {leaderboard_upload_results.get('files', 0)} leaderboard files[/green]")
+        console.print(f"[green]Uploaded {leaderboard_upload_results.get('uploaded', 0)} leaderboard files[/green]")
 
-        # Update repository README
-        readme_updated = update_repository_readme(repo_id=output_repo_id)
+        # Update repository README - force update if any submissions were scored
+        readme_updated = update_repository_readme(repo_id=output_repo_id, force_update=total_unscored > 0)
         if readme_updated:
             console.print("[green]Updated repository README[/green]")
         else:
-            console.print("[yellow]README update skipped (updated recently or no changes needed)[/yellow]")
+            console.print("[yellow]README update failed[/yellow]")
 
     console.print("[green]Scoring complete![/green]")
 

@@ -556,19 +556,23 @@ def eval_completions(
             # Ensure log directory exists
             log_file.parent.mkdir(exist_ok=True, parents=True)
 
-            # Append to existing log if it exists
-            existing_logs = []
+            # Read existing logs organized by model
+            existing_logs = {}
             if log_file.exists():
                 try:
                     existing_logs = json.loads(log_file.read_text())
-                    if not isinstance(existing_logs, list):
-                        existing_logs = [existing_logs]
+                    if not isinstance(existing_logs, dict):
+                        existing_logs = {}
                 except:
-                    existing_logs = []
+                    existing_logs = {}
 
-            existing_logs.append(log_data)
+            # Create model_arch key if it doesn't exist and store log directly (overwrite)
+            model_key = model_arch.replace("/", "_")  # Ensure safe key name
+            existing_logs[model_key] = log_data  # Overwrite instead of append to a list
+
+            # Write updated logs back to file
             log_file.write_text(json.dumps(existing_logs, indent=2))
-            console.print(f"[green]Saved prompt and response logs to {log_file}[/green]")
+            console.print(f"[green]Saved prompt and response logs for model {model_arch} to {log_file}[/green]")
 
         # Final update
         if processed_count > 0:
