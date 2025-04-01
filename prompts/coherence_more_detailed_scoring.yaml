@@ -9,28 +9,28 @@ system_prompt: |
      - Create an explicit list of all logical inconsistencies, character confusion issues, and abandoned story elements
      - Count the total number of issues in each category
      - Use this count to determine the appropriate score range
-     - Severe issues (like character role confusion or abandoned central premises) automatically cap scores at 4 or below
+     - Severe issues (like character role confusion or abandoned central premises) automatically cap scores at 2 or below
      - Multiple minor issues should accumulate to lower scores proportionally
 
-  3. **Scoring Scale**: Use this balanced, discerning scoring scale for all categories:
-     - 1-2: Severely underdeveloped, with fundamental issues that significantly impair understanding
-     - 3-4: Needs improvement, with multiple issues affecting comprehension
-     - 5-6: Developing skills, showing basic competence with several notable areas for growth
-     - 7-8: Strong work, demonstrating solid skills with only minor issues
-     - 9-10: Exceptional work, showing mastery well beyond expectations
+  3. **Scoring Scale**: Use this clear 5-point scoring scale for all categories:
+     - 1: Poor - Severely underdeveloped with fundamental issues that significantly impair understanding
+     - 2: Below Average - Multiple issues affecting comprehension and enjoyment
+     - 3: Average - Basic competence with several notable areas for growth
+     - 4: Good - Strong work with only minor issues
+     - 5: Excellent - Exceptional work showing mastery beyond expectations for age
 
      When scoring, consider:
-     - A score of 5 represents the average expected quality
-     - Scores below 4 indicate issues that require addressing
-     - Scores above 7 should be reserved for truly standout elements
-     - Remember that even young children's stories can be evaluated for basic coherence and logic
+     - A score of 3 represents the average expected quality for the age group
+     - Scores below 2 indicate serious issues that require addressing
+     - Scores of 4-5 should be reserved for truly standout elements
+     - Even young children's stories should maintain basic coherence and logic
 
   4. **Automatic Score Caps**:
-     - If characters perform actions that logically belong to other characters → Maximum 3 for Coherence
-     - If a central premise is abandoned (e.g., tiger's guitar is never mentioned again) → Maximum 4 for Plot
-     - If dialogue doesn't make logical sense in context → Maximum 4 for Grammar
-     - If character traits/abilities drastically change without explanation → Maximum 3 for Consistency
-     - If the story feels incomplete or lacks a proper ending → Maximum 4 for Plot
+     - If characters perform actions that logically belong to other characters → Maximum 1 for Coherence
+     - If a central premise is abandoned (e.g., tiger's guitar is never mentioned again) → Maximum 2 for Plot
+     - If dialogue doesn't make logical sense in context → Maximum 2 for Grammar
+     - If character traits/abilities drastically change without explanation → Maximum 1 for Consistency
+     - If the story feels incomplete or lacks a proper ending → Maximum 2 for Plot
 
   5. **Incomplete Stories**: A story that lacks proper closure or feels unfinished is a significant detriment:
      - Stories must have a sense of completion, not just stop abruptly
@@ -108,45 +108,51 @@ system_prompt: |
 
   After your reasoning, output your final assessment in the following format:
 
-  **Grammar Analysis**:
-  Strength: [describe one specific strength with an example]
-  Area for improvement: [describe one specific area for improvement with an example]
-
-  GRAMMAR: [score between 1 and 10]
-
-  **Coherence Analysis**:
-  Strength: [describe one specific strength with an example]
-  Area for improvement: [describe one specific area for improvement with an example]
-
-  COHERENCE: [score between 1 and 10]
-
-  **Creativity Analysis**:
-  Strength: [describe one specific strength with an example]
-  Area for improvement: [describe one specific area for improvement with an example]
-
-  CREATIVITY: [score between 1 and 10]
-
-  **Consistency Analysis**:
-  Strength: [describe one specific strength with an example]
-  Area for improvement: [describe one specific area for improvement with an example]
-
-  CONSISTENCY: [score between 1 and 10]
-
-  **Plot Analysis**:
-  Strength: [describe one specific strength with an example]
-  Area for improvement: [describe one specific area for improvement with an example]
-
-  PLOT: [score between 1 and 10]
-
   **Age Assessment**:
   Reasoning: [detailed explanation for age assessment with specific examples from the text]
 
   AGE: [A, B, C, D, E, or F]
 
+  **Grammar Analysis**:
+  Strength: [describe one specific strength with an example]
+  Area for improvement: [describe one specific area for improvement with an example]
+  Is the grammar below average, average or above average? [below average, average or above average]
+
+  GRAMMAR: [score between 1 and 5]
+
+  **Coherence Analysis**:
+  Strength: [describe one specific strength with an example]
+  Area for improvement: [describe one specific area for improvement with an example]
+  Is the coherence below average, average or above average? [below average, average or above average]
+
+  COHERENCE: [score between 1 and 5]
+
+  **Creativity Analysis**:
+  Strength: [describe one specific strength with an example]
+  Area for improvement: [describe one specific area for improvement with an example]
+  Is the creativity below average, average or above average? [below average, average or above average]
+
+  CREATIVITY: [score between 1 and 5]
+
+  **Consistency Analysis**:
+  Strength: [describe one specific strength with an example]
+  Area for improvement: [describe one specific area for improvement with an example]
+  Is the consistency below average, average or above average? [below average, average or above average]
+
+  CONSISTENCY: [score between 1 and 5]
+
+  **Plot Analysis**:
+  Strength: [describe one specific strength with an example]
+  Area for improvement: [describe one specific area for improvement with an example]
+  Is the plot below average, average or above average? [below average, average or above average]
+
+  PLOT: [score between 1 and 5]
+
   **Overall Assessment**:
   Summary: [comprehensive summary of key strengths and weaknesses]
+  Is the overall story below average, average or above average? [below average, average or above average]
 
-  OVERALL: [score between 1 and 10]
+  OVERALL: [score between 1 and 5]
 
 user_prompt: |
   The phrase `COMPLETION START:` marks the separator between the given beginning and the story completion. Everything before `COMPLETION START:` is the original story prompt, and everything after `COMPLETION START:` is the completion you need to evaluate.
@@ -175,9 +181,9 @@ followup_prompt: |
   Do not output any new reasoning. Just provide the scores.
 
   AGE: [A, B, C, D, E, or F]
-  GRAMMAR: [score between 1 and 10]
-  COHERENCE: [score between 1 and 10]
-  CREATIVITY: [score between 1 and 10]
-  CONSISTENCY: [score between 1 and 10]
-  PLOT: [score between 1 and 10]
-  OVERALL: [score between 1 and 10]
+  GRAMMAR: [score between 1 and 5]
+  COHERENCE: [score between 1 and 5]
+  CREATIVITY: [score between 1 and 5]
+  CONSISTENCY: [score between 1 and 5]
+  PLOT: [score between 1 and 5]
+  OVERALL: [score between 1 and 5]
