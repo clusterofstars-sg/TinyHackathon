@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}Compare Story #{{ item_id }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/">Home</a></li>
+        <li class="breadcrumb-item"><a href="/logs/{{ username }}">{{ username }}</a></li>
+        <li class="breadcrumb-item"><a href="/logs/{{ username }}/{{ log_file }}">{{ log_file }}</a></li>
+        <li class="breadcrumb-item active" aria-current="page">Compare Story #{{ item_id }}</li>
+    </ol>
+</nav>
+
+<div class="row">
+    <div class="col-md-12">
+        <h1>Compare Story #{{ item_id }}</h1>
+
+        <!-- Display story content -->
+        <div class="card mb-4">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0">Story</h5>
+            </div>
+            <div class="card-body">
+                <div class="story-content" style="background-color: #f8fff8; padding: 15px; border-radius: 5px;">
+                    {{ story_content | safe }}
+                </div>
+            </div>
+        </div>
+
+        <!-- Model comparison table -->
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0">Model Comparisons</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-bordered compare-table">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Model</th>
+                                {% for score_name in evaluations[0].scores.keys() %}
+                                <th>{{ score_name }}</th>
+                                {% endfor %}
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for eval in evaluations %}
+                            <tr>
+                                <td><strong>{{ eval.model_name }}</strong></td>
+                                {% for score_name, score_value in eval.scores.items() %}
+                                <td>{{ score_value }}</td>
+                                {% endfor %}
+                                <td>
+                                    <button class="btn btn-sm btn-outline-primary" type="button"
+                                        data-bs-toggle="collapse" data-bs-target="#response{{ loop.index }}"
+                                        aria-expanded="false">
+                                        View Response
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr class="collapse" id="response{{ loop.index }}">
+                                <td colspan="{{ eval.scores|length + 2 }}">
+                                    <div class="card card-body mb-0">
+                                        <h6>Response:</h6>
+                                        <pre class="mb-3">{{ eval.response }}</pre>
+
+                                        {% if eval.followup_response %}
+                                        <h6>Followup Response:</h6>
+                                        <pre>{{ eval.followup_response }}</pre>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Simple Score Comparison -->
+        <div class="card mb-4">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0">Score Comparison</h5>
+            </div>
+            <div class="card-body">
+                {% for score_name in evaluations[0].scores.keys() %}
+                <h6 class="mt-3">{{ score_name }}</h6>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Model</th>
+                                <th>Score</th>
+                                <th>Visual</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for eval in evaluations %}
+                            <tr>
+                                <td>{{ eval.model_name }}</td>
+                                <td>{{ eval.scores[score_name] }}</td>
+                                <td class="w-50">
+                                    <div class="score-bar bg-{{ ['primary', 'success', 'info', 'warning', 'danger', 'secondary'][loop.index0 % 6] }}"
+                                        data-score="{{ eval.scores[score_name] }}">
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="d-flex justify-content-between">
+            <a href="/logs/{{ username }}/{{ log_file }}" class="btn btn-secondary">
+                Back to Log
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        // Set widths for score bars based on data-score attribute
+        const scoreBars = document.querySelectorAll('.score-bar');
+        scoreBars.forEach(bar => {
+            const score = parseFloat(bar.getAttribute('data-score'));
+            if (!isNaN(score)) {
+                bar.style.width = (score * 10) + '%';
+            }
+        });
+    });
+</script>
+{% endblock %}

@@ -54,6 +54,80 @@
             display: inline-block;
             margin: 0 5px;
         }
+
+        .accordion-button:not(.collapsed) {
+            background-color: #e7f1ff;
+            color: #0c63e4;
+        }
+
+        /* Models accordion styling */
+        #modelsAccordion .accordion-item {
+            border: 1px solid rgba(0, 0, 0, .125);
+            border-radius: 0.25rem;
+            overflow: hidden;
+        }
+
+        #modelsAccordion .accordion-button {
+            font-size: 1.2rem;
+        }
+
+        #modelsAccordion .accordion-button:not(.collapsed) {
+            background-color: #e7f1ff;
+            color: #0c63e4;
+        }
+
+        /* Make sure the inner accordions look different from the main one */
+        .evaluation-card .accordion-item {
+            border: none;
+            border-bottom: 1px solid rgba(0, 0, 0, .125);
+        }
+
+        .evaluation-card .accordion-button {
+            background-color: #f8f9fa;
+        }
+
+        .evaluation-card .accordion-button:not(.collapsed) {
+            background-color: #e2e6ea;
+            color: #495057;
+        }
+
+        .compare-table th,
+        .compare-table td {
+            vertical-align: middle;
+        }
+
+        .score-bar {
+            height: 20px;
+        }
+
+        /* Handle score width with JavaScript */
+        .score-comparison .progress {
+            height: 24px;
+        }
+
+        .score-comparison .progress-bar {
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            overflow: hidden;
+            font-size: 0.875rem;
+        }
+
+        .story-btn-with-score {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .story-btn-with-score .badge {
+            font-size: 0.75rem;
+            padding: 0.2em 0.5em;
+            font-weight: normal;
+        }
+
+        .sort-controls .btn {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+        }
     </style>
     {% block head %}{% endblock %}
 </head>
