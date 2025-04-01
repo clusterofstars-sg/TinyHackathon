@@ -110,7 +110,6 @@ def process_submission(
 
     try:
         df = pd.read_csv(submission_file)
-        df = df[df.index % 20 == 3].copy()
         prompts = df["prompt"].tolist()
         completions = df["completion"].tolist()
 

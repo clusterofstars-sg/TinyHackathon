@@ -22,11 +22,11 @@ def generate(evaluation_csv: Annotated[str, typer.Argument(help="Path to evaluat
     df = pd.read_csv(evaluation_csv)
     
     #Get rid of duplicates, uniform sample, 300//20=15 total
-    selected_rows = df[df.index % 20 == 3].copy() 
+    selected_rows = df#[df.index % 20 == 3].copy() 
 
     completions= [generate_completion(prompt, model_hf) for prompt in selected_rows['prompt']]
     selected_rows['completion'] = completions
-    filename = f'completions_{model_hf.split("/")[-1]}.csv'
+    filename = f'completions_big_{model_hf.split("/")[-1]}.csv'
     console.print(f"[green]Completions saved to {filename}[/green]")
     selected_rows.to_csv(filename, index=False)
 
