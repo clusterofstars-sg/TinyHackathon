@@ -4,6 +4,7 @@ import json
 import re
 import os
 import tempfile
+import time
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, Annotated, Tuple, Set
@@ -12,9 +13,14 @@ import pandas as pd
 import typer
 from huggingface_hub import HfApi
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.table import Table
 
 # Import from submission.py for authentication
 from submission import get_hf_user
+
+# Import from llm_scoring
+import llm_scoring
 
 console = Console()
 
@@ -91,6 +97,75 @@ class UploadTracker:
         return hours_since_update >= min_interval_hours
 
 
+def download_new_submissions(
+    dataset_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions", output_dir: Union[str, Path] = "downloaded_submissions"
+) -> List[Dict[str, Any]]:
+    """Download all new submissions from HF dataset.
+
+    Args:
+        dataset_id: Hugging Face dataset ID
+        output_dir: Directory to save downloaded submissions
+
+    Returns:
+        List of dictionaries with information about downloaded files
+    """
+    # Get HF API
+    _, api = get_hf_user()
+
+    # Create output directory
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
+
+    # Create tracking file for processed submissions
+    processed_file = output_dir / "processed.json"
+    if processed_file.exists():
+        processed = set(json.loads(processed_file.read_text()))
+    else:
+        processed = set()
+
+    # Get all files in the dataset that match our pattern
+    files = api.list_repo_files(repo_id=dataset_id, repo_type="dataset")
+    submission_files = [f for f in files if f.startswith("submissions/") and f.endswith(".csv")]
+
+    # Download new submissions
+    new_files = []
+    for remote_path in submission_files:
+        if remote_path in processed:
+            continue
+
+        # Extract username and filename
+        parts = remote_path.split("/")
+        if len(parts) != 3:
+            continue  # Skip unexpected formats
+
+        username = parts[1]
+        filename = parts[2]
+
+        # Create user directory
+        user_dir = output_dir / username
+        user_dir.mkdir(exist_ok=True)
+
+        # Download file
+        local_path = user_dir / filename
+        console.print(f"Downloading [yellow]{remote_path}[/yellow] to [blue]{local_path}[/blue]")
+
+        # Download to the correct path
+        downloaded_path = api.hf_hub_download(repo_id=dataset_id, repo_type="dataset", filename=remote_path, local_dir=output_dir)
+
+        # Move file to the correct location if needed
+        if Path(downloaded_path) != local_path:
+            Path(downloaded_path).rename(local_path)
+
+        # Add to processed list
+        processed.add(remote_path)
+        new_files.append(dict(username=username, filename=filename, remote_path=remote_path, local_path=local_path))
+
+    # Update processed file
+    processed_file.write_text(json.dumps(list(processed)))
+
+    return new_files
+
+
 def get_authenticated_api() -> HfApi:
     """Get authenticated HF API instance."""
     _, api = get_hf_user()
@@ -110,11 +185,16 @@ def extract_scores(response: str) -> Tuple[Dict[str, float], bool]:
         Tuple of (scores dict, success boolean)
     """
     scores = {}
+
+    # Pre-process response to remove formatting characters
+    # Keep only alphanumeric, whitespace, and colons
+    cleaned_response = re.sub(r"[^a-zA-Z0-9\s:]", "", response)
+
     # Extract individual category scores with a more flexible regex
     for category in ScoreCategory:
         # More flexible pattern that allows for punctuation and variations
         pattern = f"{category.value}\\s*[:=>]\\s*(\\d+(?:\\.\\d+)?)"
-        matches = re.findall(pattern, response, re.IGNORECASE)
+        matches = re.findall(pattern, cleaned_response, re.IGNORECASE)
 
         if matches:
             # Use the last match if multiple exist
@@ -859,7 +939,7 @@ def save_weight_class_leaderboards(weight_class_leaderboards: Dict[str, pd.DataF
     return saved_files
 
 
-def generate_and_save_all_leaderboards(base_dir: str = "submissions", output_dir: str = ".") -> Dict[str, Path]:
+def generate_and_save_all_leaderboards(base_dir: str = "submissions", output_dir: str = ".") -> pd.DataFrame:
     """Generate and save all leaderboards in one function.
 
     This is a convenience function that combines all leaderboard generation
@@ -894,14 +974,14 @@ def generate_and_save_all_leaderboards(base_dir: str = "submissions", output_dir
     # Combine all saved files
     saved_files.update(weight_class_files)
 
-    return saved_files
+    return global_leaderboard
 
 
 def upload_user_files(
     username: str,
     submission_id: Optional[str] = None,
     base_dir: str = "submissions",
-    repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions",
+    repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Scores",
 ) -> Dict[str, int]:
     """Upload files for a specific user and optionally a specific submission.
 
@@ -1036,9 +1116,7 @@ def _upload_submission_folder(
     return results
 
 
-def upload_all_user_files(
-    base_dir: str = "submissions", repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions"
-) -> Dict[str, int]:
+def upload_all_user_files(base_dir: str = "submissions", repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Scores") -> Dict[str, int]:
     """Upload files for all users in the base directory.
 
     Args:
@@ -1077,7 +1155,7 @@ def upload_all_user_files(
     return total_results
 
 
-def upload_leaderboards(leaderboard_dir: str = ".", repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions") -> Dict[str, int]:
+def upload_leaderboards(leaderboard_dir: str = ".", repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Scores") -> Dict[str, int]:
     """Upload leaderboard files to the repository.
 
     Args:
@@ -1230,7 +1308,7 @@ def generate_readme_leaderboard_section(leaderboard_dir: str = ".") -> str:
     return "\n".join(md_content)
 
 
-def update_repository_readme(leaderboard_dir: str = ".", repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions") -> bool:
+def update_repository_readme(leaderboard_dir: str = ".", repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Scores") -> bool:
     """Update the repository README with leaderboard information.
 
     Args:
@@ -1298,40 +1376,262 @@ def update_repository_readme(leaderboard_dir: str = ".", repo_id: str = "cluster
             return False
 
 
+def display_leaderboard_preview(leaderboard_df: pd.DataFrame):
+    """Show a terminal preview of the leaderboard using Rich Table."""
+    # Create a table with proper styling
+    table = Table(title="Leaderboard Preview")
+
+    # Add columns with styles
+    table.add_column("Rank", justify="right", style="cyan")
+    table.add_column("Username", style="magenta")
+    table.add_column("Overall", justify="right", style="green")
+    table.add_column("Grammar", justify="right")
+    table.add_column("Creativity", justify="right")
+    table.add_column("Consistency", justify="right")
+    table.add_column("Plot", justify="right")
+    table.add_column("Weight", style="blue")
+
+    # Add top rows (limited to avoid cluttering terminal)
+    for _, row in leaderboard_df.head(10).iterrows():
+        table.add_row(
+            str(row["rank"]),
+            row["username"],
+            f"{row['overall']:.2f}",
+            f"{row['grammar']:.2f}",
+            f"{row['creativity']:.2f}",
+            f"{row['consistency']:.2f}",
+            f"{row['plot']:.2f}",
+            row["weight_class"],
+        )
+
+    # Display the table in the terminal
+    console.print(table)
+
+
 # Add Typer CLI
-app = typer.Typer()
+app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 
 
 @app.command()
-def leaderboard(
-    submissions_dir: Annotated[str, typer.Option(help="Directory containing submission files")] = "submissions",
-    output_dir: Annotated[str, typer.Option(help="Directory to save leaderboard files")] = ".",
-    upload: Annotated[bool, typer.Option(help="Upload results to HF repository")] = False,
-    update_readme: Annotated[bool, typer.Option(help="Update README with leaderboards (requires upload=True)")] = False,
-):
-    """Generate leaderboards and optionally upload results to the repository."""
-    # Always generate leaderboards
-    console.print("[yellow]Generating leaderboards...[/yellow]")
-    leaderboard_files = generate_and_save_all_leaderboards(base_dir=submissions_dir, output_dir=output_dir)
+def run_scoring(
+    model_dir: str = typer.Option(..., help="Directory containing the model files"),
+    submissions_dir: Optional[Path] = typer.Option(None, help="Directory containing submissions"),
+    scores_dir: Optional[Path] = typer.Option(None, help="Directory to save scoring results"),
+    max_new_tokens: int = typer.Option(1024, help="Maximum tokens to generate"),
+    temperature: float = typer.Option(1.0, help="Temperature for generation"),
+    top_p: float = typer.Option(1.0, help="Top-p sampling value"),
+    batch_size: int = typer.Option(128, help="Batch size for inference"),
+    cache_size: int = typer.Option(1024 * 52, help="Cache size in tokens"),
+    log_prompts: bool = typer.Option(False, help="Log prompts and responses"),
+    upload: bool = typer.Option(False, help="Upload results to HF repo"),
+    prompt_file: str = typer.Option("prompts/simple_prompt.yaml", help="Path to prompt file"),
+    mode: bool = typer.Option(False, "--submit/--test", help="Submit to production (--submit) or test environment (--test). Defaults to test mode."),
+    sub_test: Optional[bool] = typer.Option(None, "--sub-test/--sub-prod", help="Override submission repository selection (test or prod). If not specified, follows the main mode."),
+    score_test: Optional[bool] = typer.Option(None, "--score-test/--score-prod", help="Override score repository selection (test or prod). If not specified, follows the main mode."),
+    test_samples: Optional[int] = typer.Option(None, help="Number of test samples to score"),
+):  # fmt: skip
+    """Run the scoring process, downloading new submissions and evaluating them."""
 
-    if not upload:
-        console.print("[green]Leaderboards generated successfully.[/green]")
-        for file_type, file_path in leaderboard_files.items():
-            console.print(f"  - {file_type}: {file_path}")
+    # Resolve which mode to use for inputs and outputs
+    # If specific overrides aren't provided, follow the main mode
+    use_test_sub = sub_test if sub_test is not None else not mode
+    use_test_score = score_test if score_test is not None else not mode
+
+    # Provide feedback about the mode
+    if not mode:
+        console.print("[yellow]TEST MODE - scoring will use test repositories and directories[/yellow]")
+        if use_test_sub != use_test_score:
+            console.print(f"[yellow]MIXED MODE - Submissions: {'TEST' if use_test_sub else 'PRODUCTION'}, Scores: {'TEST' if use_test_score else 'PRODUCTION'}[/yellow]")  # fmt: skip
+    else:
+        console.print("[green]PRODUCTION MODE - scoring will use production repositories and directories[/green]")
+        if use_test_sub != use_test_score:
+            console.print(f"[yellow]MIXED MODE - Submissions: {'TEST' if use_test_sub else 'PRODUCTION'}, Scores: {'TEST' if use_test_score else 'PRODUCTION'}[/yellow]")  # fmt: skip
+
+    # Set repository IDs based on mode
+    if use_test_sub:
+        submission_repo_id = "cluster-of-stars/TinyStoriesHackathon_Submissions_Test"
+        submission_dir = submissions_dir or "downloaded_submissions_test"
+    else:
+        submission_repo_id = "cluster-of-stars/TinyStoriesHackathon_Submissions"
+        submission_dir = submissions_dir or "downloaded_submissions"
+
+    if use_test_score:
+        output_repo_id = "cluster-of-stars/TinyStoriesHackathon_Scores_Test"
+        scores_dir_path = scores_dir or "scores_test"
+    else:
+        output_repo_id = "cluster-of-stars/TinyStoriesHackathon_Scores"
+        scores_dir_path = scores_dir or "scores"
+
+    # Print repository information
+    console.print(f"[blue]Submission Repository: {submission_repo_id}[/blue]")
+    console.print(f"[blue]Local Submissions Directory: {submission_dir}[/blue]")
+    console.print(f"[blue]Score Repository: {output_repo_id}[/blue]")
+    console.print(f"[blue]Local Scores Directory: {scores_dir_path}[/blue]")
+
+    # Download new submissions
+    if upload and not mode:
+        console.print("[yellow]In test mode with upload enabled - will wait 3 seconds before proceeding...[/yellow]")
+        for i in range(3, 0, -1):
+            console.print(f"[yellow]    {i} seconds remaining...[/yellow]")
+            time.sleep(1)
+
+    # Download new submissions
+    console.print(f"[yellow]Downloading new submissions from {submission_repo_id}...[/yellow]")
+    new_submissions = download_new_submissions(dataset_id=submission_repo_id, output_dir=submission_dir)
+    console.print(f"[green]Found {len(new_submissions)} new or updated submissions[/green]")
+
+    # Determine which submissions need scoring
+    unscored_files = []
+    Path(submission_dir).mkdir(exist_ok=True, parents=True)
+    Path(scores_dir_path).mkdir(exist_ok=True, parents=True)
+
+    # Use a simple message instead of an indeterminate progress bar
+    console.print("[yellow]Scanning for unscored submissions...[/yellow]")
+
+    # Get list of all CSV files
+    for user_dir in Path(submission_dir).glob("*"):
+        if not user_dir.is_dir():
+            continue
+
+        for csv_file in user_dir.glob("*.csv"):
+            # Skip summary files
+            if csv_file.name == "submission_summary.csv" or csv_file.name == "score_history.csv":
+                continue
+
+            username = user_dir.name
+            submission_id = csv_file.stem
+            summary_path = Path(scores_dir_path) / username / f"{submission_id}" / "submission_summary.csv"
+
+            if not summary_path.exists():
+                unscored_files.append(
+                    {
+                        "username": username,
+                        "submission_id": submission_id,
+                        "csv_path": csv_file,
+                    }
+                )
+
+    console.print("[green]Completed scanning for unscored submissions[/green]")
+    console.print(f"[green]Found {len(unscored_files)} submissions needing scoring[/green]")
+
+    if not unscored_files:
+        console.print("[yellow]No submissions to score. Exiting.[/yellow]")
         return
 
-    # Upload functionality
-    console.print("[yellow]Uploading user files...[/yellow]")
-    upload_all_user_files(base_dir=submissions_dir)
+    # Process all submissions together
+    all_csv_paths = [item["csv_path"] for item in unscored_files]
+    console.print(f"[yellow]Processing {len(all_csv_paths)} submissions...[/yellow]")
 
-    console.print("[yellow]Uploading leaderboards...[/yellow]")
-    upload_leaderboards(leaderboard_dir=output_dir)
+    if test_samples:
+        console.print(f"[yellow]Limiting to {test_samples} samples per submission for testing[/yellow]")
 
-    if update_readme and upload:
-        console.print("[yellow]Updating README with leaderboards...[/yellow]")
-        update_repository_readme(leaderboard_dir=output_dir)
+    all_scores = llm_scoring.score_submission(
+        submission_file=all_csv_paths,
+        model_dir=model_dir,
+        temperature=temperature,
+        top_p=top_p,
+        max_new_tokens=max_new_tokens,
+        batch_size=batch_size,
+        cache_size=cache_size,
+        log_prompts=log_prompts,
+        prompt_file=prompt_file,
+        sample=test_samples,  # Pass the test_samples parameter
+    )
 
-    console.print("[green]All operations completed successfully![/green]")
+    # Process and save results
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("[green]Saving scoring results...", total=len(unscored_files))
+
+        for item in unscored_files:
+            username = item["username"]
+            submission_id = item["submission_id"]
+            csv_path = item["csv_path"]
+
+            if username in all_scores and submission_id in all_scores[username]:
+                # Read original submission to get prompts and completions
+                df = pd.read_csv(csv_path)
+                prompts = df["prompt"].tolist()
+                completions = df["completion"].tolist()
+
+                # Extract scores for this submission
+                submission_scores = all_scores[username][submission_id]
+
+                # Get the first model's results
+                model_name = list(submission_scores.keys())[0]
+                item_scores = submission_scores[model_name]["details"]
+
+                # Create a dictionary of item_id to scores
+                item_scores_dict = {entry["item_id"]: entry["scores"] for entry in item_scores}
+
+                # Save model CSV
+                save_model_csv(
+                    username=username,
+                    submission_id=submission_id,
+                    model_name=model_name,
+                    prompts=prompts,
+                    completions=completions,
+                    item_scores=item_scores_dict,
+                    base_dir=scores_dir_path,
+                    overwrite=True,
+                )
+
+                # Save submission summary
+                summary_path = save_submission_summary(
+                    username=username,
+                    submission_id=submission_id,
+                    base_dir=scores_dir_path,
+                    overwrite=True,
+                )
+
+                # Update user score history if summary was created
+                if summary_path:
+                    summary_df = pd.read_csv(summary_path)
+                    update_user_score_history(
+                        username=username,
+                        submission_id=submission_id,
+                        summary_df=summary_df,
+                        base_dir=scores_dir_path,
+                        overwrite=True,
+                    )
+
+            progress.update(task, advance=1)
+
+    # Generate leaderboards
+    console.print("[yellow]Generating leaderboards...[/yellow]")
+    leaderboard_files = generate_and_save_all_leaderboards(base_dir=scores_dir_path)
+    console.print("[green]Leaderboards generated successfully[/green]")
+
+    # Upload results if requested
+    if upload:
+        console.print(f"[yellow]Uploading results to {output_repo_id}...[/yellow]")
+
+        # Upload user files
+        user_upload_results = upload_all_user_files(base_dir=scores_dir_path, repo_id=output_repo_id)
+        console.print(f"[green]Uploaded {user_upload_results.get('files', 0)} user files[/green]")
+
+        # Upload leaderboards
+        leaderboard_upload_results = upload_leaderboards(repo_id=output_repo_id)
+        console.print(f"[green]Uploaded {leaderboard_upload_results.get('files', 0)} leaderboard files[/green]")
+
+        # Update repository README
+        readme_updated = update_repository_readme(repo_id=output_repo_id)
+        if readme_updated:
+            console.print("[green]Updated repository README[/green]")
+        else:
+            console.print("[yellow]README update skipped (updated recently or no changes needed)[/yellow]")
+
+    console.print("[green]Scoring complete![/green]")
+
+    # Display leaderboard preview
+    display_leaderboard_preview(leaderboard_files)
 
 
 if __name__ == "__main__":
