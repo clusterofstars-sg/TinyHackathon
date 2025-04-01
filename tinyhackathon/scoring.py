@@ -388,18 +388,27 @@ def extract_scores(response: str) -> Tuple[Dict[str, float], bool]:
     scores = {}
 
     # Pre-process response to remove formatting characters
-    # Keep only alphanumeric, whitespace, and colons
-    cleaned_response = re.sub(r"[^a-zA-Z0-9\s:]", "", response)
+    # Keep only alphanumeric, whitespace, colons, slashes, and periods (for decimals)
+    cleaned_response = re.sub(r"[^a-zA-Z0-9\s:/.()]", "", response)
 
     # Extract individual category scores with a more flexible regex
     for category in ScoreCategory:
-        # More flexible pattern that allows for punctuation and variations
-        pattern = f"{category.value}\\s*[:=>]\\s*(\\d+(?:\\.\\d+)?)"
-        matches = re.findall(pattern, cleaned_response, re.IGNORECASE)
+        # Pattern for standard scores (7 or 7.5)
+        standard_pattern = f"{category.value}\\s*[:=>]\\s*(\\d+(?:\\.\\d+)?)"
+        # Pattern for scores in X/10 format
+        ratio_pattern = f"{category.value}\\s*[:=>]\\s*(\\d+(?:\\.\\d+)?)\\s*\\/\\s*10"
 
-        if matches:
+        # First check for X/10 format
+        ratio_matches = re.findall(ratio_pattern, cleaned_response, re.IGNORECASE)
+        if ratio_matches:
             # Use the last match if multiple exist
-            scores[category.lower()] = float(matches[-1])
+            scores[category.lower()] = float(ratio_matches[-1])
+        else:
+            # Then check for standard format
+            standard_matches = re.findall(standard_pattern, cleaned_response, re.IGNORECASE)
+            if standard_matches:
+                # Use the last match if multiple exist
+                scores[category.lower()] = float(standard_matches[-1])
 
     # Check if all required categories have scores
     success = all(category.lower() in scores for category in ScoreCategory)
