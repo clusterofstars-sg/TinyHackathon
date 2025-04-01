@@ -168,3 +168,15 @@ submissions/
 downloaded_submissions/
 tiny_stories/
 scores.json
+leaderboards/
+scores/
+scores_test/
+
+# State files
+.upload_state.json
+.scoring_state.json
+state/
+
+# Root files to ignore
+/*.md
+/*.csv
