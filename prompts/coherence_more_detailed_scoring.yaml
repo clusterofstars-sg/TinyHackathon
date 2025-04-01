@@ -21,13 +21,13 @@ system_prompt: |
 
      When scoring, consider:
      - A score of 3 represents the average expected quality for the age group
-     - Scores below 2 indicate serious issues that require addressing
-     - Scores of 4-5 should be reserved for truly standout elements
+     - Scores of 1 and 2 indicate serious issues that require addressing
+     - Scores 4 and 5 should be reserved for truly standout elements
      - Even young children's stories should maintain basic coherence and logic
 
   4. **Automatic Score Caps**:
      - If characters perform actions that logically belong to other characters → Maximum 1 for Coherence
-     - If a central premise is abandoned (e.g., tiger's guitar is never mentioned again) → Maximum 2 for Plot
+     - If a central premise is abandoned → Maximum 2 for Plot
      - If dialogue doesn't make logical sense in context → Maximum 2 for Grammar
      - If character traits/abilities drastically change without explanation → Maximum 1 for Consistency
      - If the story feels incomplete or lacks a proper ending → Maximum 2 for Plot
