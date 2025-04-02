@@ -7,6 +7,7 @@ import time
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Dict, List, Optional, Tuple, Union
+import shutil
 
 # Import from llm_scoring
 import llm_scoring
@@ -2386,6 +2387,28 @@ def validate_scoring_results(scores: Dict[str, Dict[str, Dict[str, Any]]]) -> bo
                             return False
 
     return True
+
+
+@app.command()
+def cleanup(
+    dir: Annotated[
+        Optional[Path],
+        typer.Option(help="Directory containing the directories that need to be deleted [state,downloaded_submissions,logs,etc]"),
+    ] = Path("."),
+):
+    "Remove directories used for testing and evaluation"
+    dirs_to_remove = ["state", "downloaded_submissions_test", "leaderboards", "downloaded_submissions", "logs", "scores_test"]
+
+    for dir_name in dirs_to_remove:
+        path = Path(dir_name)
+        if path.exists():
+            if path.is_dir():
+                shutil.rmtree(path)
+                console.print(f"[green]Removed {dir_name}[/green]")
+            else:
+                console.print(f"[red]Not a directory - {dir_name}[/red]")
+        else:
+            console.print(f"[yellow]Skipping {dir_name} - not found[/yellow]")
 
 
 if __name__ == "__main__":
