@@ -289,6 +289,7 @@ def download_eval():  # fmt: skip
             repo_id="cluster-of-stars/tiny_stories_evaluation_prompts",
             filename="evaluation_prompts.csv",
             repo_type="dataset",
+            local_dir=".",
         )
         console.print("\n[green]Successfully downloaded and saved to evaluation_prompts.csv[/green]\n")
     except Exception as e:
