@@ -275,7 +275,7 @@ def whoami():
         elif role == "write":
             console.print(f"[green]Logged in as [blue]{info['name']}[/blue] with write access.[/green]")
         else:
-            raise ValueError(f"Unknown Hugging Face role: {info['name']}")
+            raise ValueError(f"Unknown Hugging Face role for user: {info['name']}")
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
 
@@ -289,6 +289,7 @@ def download_eval():  # fmt: skip
             repo_id="cluster-of-stars/tiny_stories_evaluation_prompts",
             filename="evaluation_prompts.csv",
             repo_type="dataset",
+            local_dir=".",
         )
         console.print("\n[green]Successfully downloaded and saved to evaluation_prompts.csv[/green]\n")
     except Exception as e:

@@ -1,26 +1,25 @@
 import csv
 import datetime
 import json
-import re
 import os
+import re
 import tempfile
 import time
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, Annotated, Tuple, Set
+from typing import Annotated, Any, Dict, List, Optional, Set, Tuple, Union
 
+# Import from llm_scoring
+import llm_scoring
 import pandas as pd
 import typer
 from huggingface_hub import HfApi
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
 
 # Import from submission.py for authentication
 from submission import get_hf_user
-
-# Import from llm_scoring
-import llm_scoring
 
 console = Console()
 
@@ -251,7 +250,70 @@ class ScoringTracker:
     def sync_with_repository(self, repo_id: str, api: HfApi):
         """Sync scoring state with HF repository to find already scored submissions."""
         try:
-            # Check for scored submissions in repository
+            # First try to download the scoring state file directly
+            try:
+                remote_state_path = "state/scoring_state.json"
+                if "test" in self.state_file.name:
+                    remote_state_path = "state/scoring_state_test.json"
+
+                # Create a temporary file for downloading
+                with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
+                    temp_path = Path(temp_file.name)
+
+                try:
+                    # Try to download the state file
+                    api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=remote_state_path, local_dir=temp_path.parent)
+
+                    downloaded_path = temp_path.parent / remote_state_path
+                    if downloaded_path.exists():
+                        # Read the remote state
+                        try:
+                            remote_state = json.loads(downloaded_path.read_text())
+                            console.print(f"[green]Downloaded scoring state from repository[/green]")
+
+                            # Merge with our local state
+                            if "scored_submissions" in remote_state:
+                                if "scored_submissions" not in self.state:
+                                    self.state["scored_submissions"] = {}
+
+                                # Merge each user's submissions
+                                for username, user_data in remote_state["scored_submissions"].items():
+                                    if username not in self.state["scored_submissions"]:
+                                        self.state["scored_submissions"][username] = {}
+
+                                    # Merge each submission
+                                    for submission_id, submission_data in user_data.items():
+                                        if submission_id not in self.state["scored_submissions"][username]:
+                                            self.state["scored_submissions"][username][submission_id] = submission_data
+                                        else:
+                                            # Merge models list
+                                            local_models = self.state["scored_submissions"][username][submission_id].get("models", [])
+                                            remote_models = submission_data.get("models", [])
+
+                                            # Combine models from both states
+                                            self.state["scored_submissions"][username][submission_id]["models"] = list(
+                                                set(local_models + remote_models)
+                                            )
+
+                            # Save the merged state
+                            self.save_state()
+                        except json.JSONDecodeError:
+                            console.print(
+                                f"[yellow]Could not parse downloaded scoring state file. Will rebuild from repository files.[/yellow]"
+                            )
+                except Exception as e:
+                    console.print(
+                        f"[yellow]Could not download scoring state file ({remote_state_path}): {e}. Will rebuild from repository files.[/yellow]"
+                    )
+            finally:
+                # Clean up the temp file if it exists
+                if "temp_path" in locals() and temp_path.exists():
+                    try:
+                        temp_path.unlink()
+                    except:
+                        pass
+
+            # Check for scored submissions in repository (as before)
             files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
 
             # Track how many new entries we found
@@ -305,6 +367,38 @@ class ScoringTracker:
                 console.print(f"[green]Scoring state synchronized with repository (no new entries found)[/green]")
         except Exception as e:
             console.print(f"[yellow]Could not sync scoring state with repository: {e}[/yellow]")
+
+    def upload_to_repository(self, repo_id: str, api: HfApi):
+        """Upload scoring state to HF repository."""
+        try:
+            # Determine remote path based on filename
+            remote_path = "state/scoring_state.json"
+            if "test" in self.state_file.name:
+                remote_path = "state/scoring_state_test.json"
+
+            # Ensure state directory exists in repository
+            try:
+                files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
+                if "state" not in files:
+                    # Create empty file in state directory to ensure it exists
+                    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
+                        temp_file.write("")
+                        temp_path = temp_file.name
+
+                    api.upload_file(path_or_fileobj=temp_path, path_in_repo="state/.gitkeep", repo_id=repo_id, repo_type="dataset")
+
+                    # Clean up temp file
+                    Path(temp_path).unlink()
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not create state directory in repository: {e}[/yellow]")
+
+            # Upload the scoring state file
+            api.upload_file(path_or_fileobj=str(self.state_file), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
+            console.print(f"[green]Uploaded scoring state to repository: {remote_path}[/green]")
+            return True
+        except Exception as e:
+            console.print(f"[red]Error uploading scoring state to repository: {e}[/red]")
+            return False
 
 
 def download_new_submissions(
@@ -776,6 +870,9 @@ def calculate_submission_average(username: str, submission_id: str, base_dir: st
     # Combine all model rows into a single DataFrame
     summary_df = pd.concat(all_model_data, ignore_index=True)
 
+    # Count the number of models
+    num_models = len(all_model_data)
+
     # Create a row for the overall average across all models
     overall_avg = {}
     for category in overall_categories:
@@ -787,9 +884,13 @@ def calculate_submission_average(username: str, submission_id: str, base_dir: st
     overall_row["item_id"] = -1  # Use -1 to indicate this is a summary
     overall_row["username"] = username
     overall_row["submission_id"] = submission_id
+    overall_row["num_models"] = num_models  # Add the number of models to the average row
 
     # Add the overall average row at the top
     summary_df = pd.concat([overall_row, summary_df], ignore_index=True)
+
+    # Add num_models column to all model rows
+    summary_df["num_models"] = summary_df.apply(lambda x: num_models if x["model_name"] == "average" else 1, axis=1)
 
     return summary_df
 
@@ -1034,8 +1135,8 @@ def generate_global_leaderboard(base_dir: str = "submissions") -> pd.DataFrame:
                 else:
                     category_scores[category_lower] = 0.0
 
-            # Note: We still process model-specific scores for merging purposes,
-            # but we don't include them in the leaderboard display
+            # Get number of models used for scoring
+            num_models = best_submission.get("num_models", 0)
 
             # Calculate total number of submissions for this user
             submission_count = len(history)
@@ -1056,6 +1157,7 @@ def generate_global_leaderboard(base_dir: str = "submissions") -> pd.DataFrame:
                 "submission_count": submission_count,
                 "submission_date": timestamp,
                 "weight_class": weight_class,
+                "num_models": num_models,  # Add number of models to the leaderboard
                 **category_scores,  # Add all category scores individually
             }
 
@@ -1104,37 +1206,6 @@ def save_global_leaderboard(leaderboard: pd.DataFrame, base_dir: str = "leaderbo
     saved_files["csv"] = csv_path
     console.print(f"[green]Global leaderboard saved to {csv_path}[/green]")
 
-    # Save Markdown
-    md_path = base_path / "leaderboard_global.md"
-
-    # Define column order with overall first, then other categories
-    score_categories = [ScoreCategory.OVERALL.lower()]
-    for category in ScoreCategory:
-        if category.lower() != ScoreCategory.OVERALL.lower():
-            score_categories.append(category.lower())
-
-    # Create a new DataFrame with columns in the desired order
-    display_cols = ["rank", "username"] + score_categories + ["submission_count", "submission_date"]
-
-    # Filter to only include columns that exist in the leaderboard
-    display_cols = [col for col in display_cols if col in leaderboard.columns]
-    display_df = leaderboard[display_cols].copy()
-
-    # Format floating point columns
-    for col in score_categories:
-        if col in display_df.columns:
-            display_df[col] = display_df[col].map(lambda x: f"{x:.2f}")
-
-    # Create markdown with a header
-    md_content = "# Global Leaderboard\n\n"
-    md_content += display_df.to_markdown(index=False, tablefmt="pipe")
-
-    with open(md_path, "w") as f:
-        f.write(md_content)
-
-    saved_files["md"] = md_path
-    console.print(f"[green]Global leaderboard markdown saved to {md_path}[/green]")
-
     return saved_files
 
 
@@ -1176,7 +1247,7 @@ def generate_weight_class_leaderboards(leaderboard: pd.DataFrame) -> Dict[str, p
 
 
 def save_weight_class_leaderboards(weight_class_leaderboards: Dict[str, pd.DataFrame], base_dir: str = "leaderboards") -> Dict[str, Path]:
-    """Save weight class leaderboards to CSV and Markdown.
+    """Save weight class leaderboards to CSV.
 
     Args:
         weight_class_leaderboards: Dictionary of weight class leaderboards
@@ -1192,22 +1263,7 @@ def save_weight_class_leaderboards(weight_class_leaderboards: Dict[str, pd.DataF
         console.print("[yellow]No weight class leaderboards to save[/yellow]")
         return saved_files
 
-    # Create combined weight class DataFrame
-    all_classes = []
-    for weight_class, leaderboard in weight_class_leaderboards.items():
-        if not leaderboard.empty:
-            all_classes.append(leaderboard)
-
-    if all_classes:
-        combined = pd.concat(all_classes, ignore_index=True)
-
-        # Save combined CSV
-        combined_path = base_path / "leaderboard_weight_class.csv"
-        combined.to_csv(combined_path, index=False)
-        saved_files["combined_csv"] = combined_path
-        console.print(f"[green]Combined weight class leaderboard saved to {combined_path}[/green]")
-
-    # Save individual weight class CSV files (but skip the markdown files)
+    # Save individual weight class CSV files
     for weight_class, leaderboard in weight_class_leaderboards.items():
         if leaderboard.empty:
             continue
@@ -1217,37 +1273,6 @@ def save_weight_class_leaderboards(weight_class_leaderboards: Dict[str, pd.DataF
         leaderboard.to_csv(csv_path, index=False)
         saved_files[f"{weight_class}_csv"] = csv_path
         console.print(f"[green]{weight_class.capitalize()} weight class leaderboard saved to {csv_path}[/green]")
-
-        # Also save as Markdown file
-        md_path = base_path / f"leaderboard_{weight_class}.md"
-
-        # Define column order with overall first, then other categories
-        score_categories = [ScoreCategory.OVERALL.lower()]
-        for category in ScoreCategory:
-            if category.lower() != ScoreCategory.OVERALL.lower():
-                score_categories.append(category.lower())
-
-        # Create a new DataFrame with columns in the desired order
-        display_cols = ["rank", "username"] + score_categories + ["submission_count", "submission_date"]
-
-        # Filter to only include columns that exist in the leaderboard
-        display_cols = [col for col in display_cols if col in leaderboard.columns]
-        display_df = leaderboard[display_cols].copy()
-
-        # Format floating point columns
-        for col in score_categories:
-            if col in display_df.columns:
-                display_df[col] = display_df[col].map(lambda x: f"{x:.2f}")
-
-        # Create markdown with a header
-        md_content = f"# {weight_class.capitalize()} Weight Class Leaderboard\n\n"
-        md_content += display_df.to_markdown(index=False, tablefmt="pipe")
-
-        with open(md_path, "w") as f:
-            f.write(md_content)
-
-        saved_files[f"{weight_class}_md"] = md_path
-        console.print(f"[green]{weight_class.capitalize()} weight class markdown saved to {md_path}[/green]")
 
     return saved_files
 
@@ -1498,19 +1523,19 @@ def upload_leaderboards(
     tracker = UploadTracker(is_test_mode=is_test_mode)
     results = {"uploaded": 0, "skipped": 0, "error": 0}
 
-    # Find all leaderboard files
+    # Find all leaderboard CSV files
     leaderboard_patterns = [
-        "leaderboard_global.*",
-        "leaderboard_weight_class.*",
-        "leaderboard_small.*",
-        "leaderboard_medium.*",
-        "leaderboard_large.*",
+        "leaderboard_global.csv",
+        "leaderboard_small.csv",
+        "leaderboard_medium.csv",
+        "leaderboard_large.csv",
     ]
 
-    # Gather leaderboard files
+    # Gather leaderboard files to check if they need updating
     leaderboard_files = []
     for pattern in leaderboard_patterns:
-        leaderboard_files.extend(leaderboard_path.glob(pattern))
+        found_files = list(leaderboard_path.glob(pattern))
+        leaderboard_files.extend(found_files)
 
     # Check if there are any files to upload
     files_to_upload = [f for f in leaderboard_files if tracker.should_upload_file(f)]
@@ -1521,49 +1546,37 @@ def upload_leaderboards(
         return results
 
     try:
-        # Create a temporary directory with symlinks to only the leaderboard files
-        # This allows upload_folder to work with just the leaderboard files
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_dir_path = Path(temp_dir)
+        # Upload the entire leaderboard directory directly
+        api.upload_folder(
+            folder_path=str(leaderboard_path),
+            path_in_repo="",  # Upload to root
+            repo_id=repo_id,
+            repo_type="dataset",
+        )
 
-            # Create symlinks to leaderboard files
-            for file_path in leaderboard_files:
-                # Create a symlink in the temp directory
-                temp_file_path = temp_dir_path / file_path.name
-                if not temp_file_path.exists():
-                    os.symlink(file_path.absolute(), temp_file_path)
+        # Mark all files as uploaded
+        for file_path in files_to_upload:
+            tracker.mark_file_uploaded(file_path)
 
-            # Upload the entire temp directory (containing only leaderboard files)
-            response = api.upload_folder(
-                folder_path=str(temp_dir_path),
-                path_in_repo="",  # Upload to root
-                repo_id=repo_id,
-                repo_type="dataset",
-            )
-
-            # Mark all files as uploaded
-            for file_path in leaderboard_files:
-                tracker.mark_file_uploaded(file_path)
-
-            # Count uploaded files
-            results["uploaded"] = len(files_to_upload)
-            console.print(f"[green]Uploaded {len(files_to_upload)} leaderboard files[/green]")
+        # Count uploaded files
+        results["uploaded"] = len(files_to_upload)
+        console.print(f"[green]Uploaded {len(files_to_upload)} leaderboard files[/green]")
 
     except Exception as e:
-        console.print(f"[red]Error uploading leaderboard files: {e}[/red]")
+        console.print(f"[red]Error uploading leaderboard files using upload_folder: {e}[/red]")
         console.print(f"[yellow]Falling back to individual file uploads...[/yellow]")
 
         # Fall back to individual uploads
         for file_path in files_to_upload:
             if tracker.should_upload_file(file_path):
                 try:
-                    remote_path = f"{file_path.name}"
+                    remote_path = file_path.name
                     api.upload_file(path_or_fileobj=str(file_path), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
                     tracker.mark_file_uploaded(file_path)
                     results["uploaded"] += 1
                     console.print(f"[green]Uploaded {file_path} to {remote_path}[/green]")
-                except Exception as e2:
-                    console.print(f"[red]Error uploading {file_path}: {e2}[/red]")
+                except Exception as e:
+                    console.print(f"[red]Error uploading {file_path}: {e}[/red]")
                     results["error"] += 1
             else:
                 results["skipped"] += 1
@@ -1586,17 +1599,44 @@ def generate_readme_leaderboard_section(leaderboard_dir: str = "leaderboards") -
     Returns:
         Markdown content for README
     """
-    # Look for global leaderboard markdown file
-    global_md_path = Path(leaderboard_dir) / "leaderboard_global.md"
-    if not global_md_path.exists():
-        console.print(f"[yellow]Global leaderboard markdown not found: {global_md_path}[/yellow]")
+    # Look for global leaderboard CSV file
+    global_csv_path = Path(leaderboard_dir) / "leaderboard_global.csv"
+    if not global_csv_path.exists():
+        console.print(f"[yellow]Global leaderboard CSV not found: {global_csv_path}[/yellow]")
         return "<!-- No leaderboard data available -->"
 
-    # Read the global leaderboard content
-    global_md_content = global_md_path.read_text()
+    # Read the global leaderboard CSV
+    try:
+        global_df = pd.read_csv(global_csv_path)
+        if global_df.empty:
+            return "<!-- No leaderboard data available -->"
+    except Exception as e:
+        console.print(f"[yellow]Error reading global leaderboard CSV: {e}[/yellow]")
+        return "<!-- No leaderboard data available -->"
 
     # Generate timestamp
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    # Define column order with overall first, then other categories
+    score_categories = [ScoreCategory.OVERALL.lower()]
+    for category in ScoreCategory:
+        if category.lower() != ScoreCategory.OVERALL.lower():
+            score_categories.append(category.lower())
+
+    # Create a new DataFrame with columns in the desired order, including num_models
+    display_cols = ["rank", "username"] + score_categories + ["num_models", "submission_count", "submission_date"]
+
+    # Filter to only include columns that exist in the leaderboard
+    display_cols = [col for col in display_cols if col in global_df.columns]
+    global_display_df = global_df[display_cols].copy()
+
+    # Format floating point columns
+    for col in score_categories:
+        if col in global_display_df.columns:
+            global_display_df[col] = global_display_df[col].map(lambda x: f"{float(x):.2f}")
+
+    # Generate global leaderboard markdown
+    global_md = global_display_df.to_markdown(index=False, tablefmt="pipe")
 
     # Build markdown content
     md_content = [
@@ -1605,8 +1645,7 @@ def generate_readme_leaderboard_section(leaderboard_dir: str = "leaderboards") -
         "",
         "### Global Standings",
         "",
-        # Include only the table portion of the global leaderboard (skip the header)
-        global_md_content.split("\n\n", 1)[1] if "\n\n" in global_md_content else global_md_content,
+        global_md,
         "",
         "### Weight Class Standings",
         "",
@@ -1622,14 +1661,8 @@ def generate_readme_leaderboard_section(leaderboard_dir: str = "leaderboards") -
                 if df.empty:
                     continue
 
-                # Define column order with overall first, then other categories
-                score_categories = [ScoreCategory.OVERALL.lower()]
-                for category in ScoreCategory:
-                    if category.lower() != ScoreCategory.OVERALL.lower():
-                        score_categories.append(category.lower())
-
                 # Create a new DataFrame with columns in the desired order
-                display_cols = ["rank", "username"] + score_categories + ["submission_count", "submission_date"]
+                display_cols = ["rank", "username"] + score_categories + ["num_models", "submission_count", "submission_date"]
 
                 # Filter to only include columns that exist in the leaderboard
                 display_cols = [col for col in display_cols if col in df.columns]
@@ -1755,6 +1788,7 @@ def display_leaderboard_preview(leaderboard_df: pd.DataFrame):
     table.add_column("Creativity", justify="right")
     table.add_column("Consistency", justify="right")
     table.add_column("Plot", justify="right")
+    table.add_column("Models", justify="right", style="blue")
     table.add_column("Weight", style="blue")
 
     # Add top rows (limited to avoid cluttering terminal)
@@ -1777,6 +1811,7 @@ def display_leaderboard_preview(leaderboard_df: pd.DataFrame):
                 f"{row['creativity']:.2f}",
                 f"{row['consistency']:.2f}",
                 f"{row['plot']:.2f}",
+                str(int(row["num_models"])) if "num_models" in row else "?",
                 row["weight_class"],
             ]
         )
@@ -1794,24 +1829,24 @@ app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pret
 
 @app.command()
 def run_scoring(
-    model_dir: Optional[Path] = typer.Option(None, help="Directory containing the model files (deprecated, use model_dirs)"),
-    model_dirs: Optional[List[Path]] = typer.Option(None, help="List of directories containing the model files to use as judges"),
-    submissions_dir: Optional[Path] = typer.Option(None, help="Directory containing submissions"),
-    scores_dir: Optional[Path] = typer.Option(None, help="Directory to save scoring results"),
-    max_new_tokens: int = typer.Option(1024, help="Maximum tokens to generate"),
-    temperature: float = typer.Option(1.0, help="Temperature for generation"),
-    top_p: float = typer.Option(1.0, help="Top-p sampling value"),
-    cache_size: int = typer.Option(1024 * 50, help="Cache size in tokens"),
-    log_prompts: bool = typer.Option(False, help="Log prompts and responses"),
-    upload: bool = typer.Option(False, help="Upload results to HF repo"),
-    prompt_file: str = typer.Option("prompts/simple_prompt.yaml", help="Path to prompt file"),
-    reasoning_template: Optional[str] = typer.Option(None, help="Path to reasoning template YAML file for deep reasoning models"),
-    mode: bool = typer.Option(False, "--submit/--test", help="Submit to production (--submit) or test environment (--test). Defaults to test mode."),
-    sub_test: Optional[bool] = typer.Option(None, "--sub-test/--sub-prod", help="Override submission repository selection (test or prod). If not specified, follows the main mode."),
-    score_test: Optional[bool] = typer.Option(None, "--score-test/--score-prod", help="Override score repository selection (test or prod). If not specified, follows the main mode."),
-    test_samples: Optional[int] = typer.Option(None, help="Number of test samples to score"),
-    draft_model_dir: Optional[Path] = typer.Option(None, help="Directory for draft model (speculative decoding)"),
-    draft_cache_size: Optional[Path] = typer.Option(None, help="Cache size for draft model"),
+    model_dir: Annotated[Optional[Path], typer.Option(help="Directory containing the model files (deprecated, use model_dirs)")] = None,
+    model_dirs: Annotated[Optional[List[Path]], typer.Option(help="List of directories containing the model files to use as judges")] = None,
+    submissions_dir: Annotated[Optional[Path], typer.Option(help="Directory containing submissions")] = None,
+    scores_dir: Annotated[Optional[Path], typer.Option(help="Directory to save scoring results")] = None,
+    max_new_tokens: Annotated[int, typer.Option(help="Maximum tokens to generate")] = 1024,
+    temperature: Annotated[float, typer.Option(help="Temperature for generation")] = 1.0,
+    top_p: Annotated[float, typer.Option(help="Top-p sampling value")] = 1.0,
+    cache_size: Annotated[int, typer.Option(help="Cache size in tokens")] = 1024 * 50,
+    log_prompts: Annotated[bool, typer.Option(help="Log prompts and responses")] = False,
+    upload: Annotated[bool, typer.Option(help="Upload results to HF repo")] = False,
+    prompt_file: Annotated[str, typer.Option(help="Path to prompt file")] = "prompts/simple_prompt.yaml",
+    reasoning_template: Annotated[Optional[str], typer.Option(help="Path to reasoning template YAML file for deep reasoning models")] = None,
+    mode: Annotated[bool, typer.Option("--submit/--test", help="Submit to production (--submit) or test environment (--test). Defaults to test mode.")] = False,
+    sub_test: Annotated[Optional[bool], typer.Option("--sub-test/--sub-prod", help="Override submission repository selection (test or prod). If not specified, follows the main mode.")] = None,
+    score_test: Annotated[Optional[bool], typer.Option("--score-test/--score-prod", help="Override score repository selection (test or prod). If not specified, follows the main mode.")] = None,
+    test_samples: Annotated[Optional[int], typer.Option(help="Number of test samples to score")] = None,
+    draft_model_dir: Annotated[Optional[Path], typer.Option(help="Directory for draft model (speculative decoding)")] = None,
+    draft_cache_size: Annotated[Optional[Path], typer.Option(help="Cache size for draft model")] = None,
 ):  # fmt: skip
     """Run the scoring process, downloading new submissions and evaluating them.
 
@@ -2197,6 +2232,12 @@ def run_scoring(
             console.print("[green]Updated repository README[/green]")
         else:
             console.print("[yellow]README update failed[/yellow]")
+
+        # Upload scoring state again after all processing is complete (in case more scores were added)
+        try:
+            scoring_tracker.upload_to_repository(output_repo_id, api)
+        except Exception as e:
+            console.print(f"[yellow]Could not upload final scoring state: {e}[/yellow]")
 
     console.print("[green]Scoring complete![/green]")
 

@@ -1,10 +1,8 @@
-import csv
 import datetime
 import json
 import re
 import time
 import traceback
-from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -16,11 +14,9 @@ from exllamav2 import ExLlamaV2, ExLlamaV2Cache, ExLlamaV2Config, ExLlamaV2Token
 from exllamav2.generator import ExLlamaV2DynamicGenerator, ExLlamaV2DynamicJob, ExLlamaV2Sampler
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
-from rich.table import Table
-from submission import get_hf_user
 
 # Import from scoring only what we need
-from scoring import ScoreCategory, extract_scores, process_scores
+from scoring import extract_scores, process_scores
 
 console = Console()
 
