@@ -2327,6 +2327,13 @@ def run_scoring(
         else:
             console.print("[yellow]README update failed[/yellow]")
 
+        # Sync with repository again to prevent race conditions before uploading final state
+        try:
+            console.print("[yellow]Syncing scoring state before final upload...[/yellow]")
+            scoring_tracker.sync_with_repository(output_repo_id, api)
+        except Exception as e:
+            console.print(f"[yellow]Could not sync scoring state before final upload: {e}[/yellow]")
+
         # Upload scoring state again after all processing is complete (in case more scores were added)
         try:
             scoring_tracker.upload_to_repository(output_repo_id, api)
