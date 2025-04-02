@@ -162,15 +162,15 @@ user_prompt: |
 
   First, evaluate the story completion with a balanced perspective, acknowledging both overall strengths and areas for improvement.
 
-  For each category (Grammar, Coherence, Creativity, Consistency, and Plot), identify one strength and one area for improvement before providing your score for that category.
+  For each category (Grammar, Coherence, Creativity, Consistency, and Plot), identify one strength and one area for improvement before providing your correctly formatted score for that category.
 
   Remember to apply the automatic score caps for serious issues as described in the instructions.
 
-  Don't forget to give your final overall score.
+  Don't forget to give your correctly formatted final overall score.
 
 # Follow-up prompt
 followup_prompt: |
-  You either forgot to provide a score for one of the categories, provided a score that is not between 1 and 5, or ran out of tokens before providing the scores.
+  You either forgot to provide a score for one of the categories, provided a score that is not between 1 and 5, provided a score in the incorrect format, or ran out of tokens before providing the scores.
 
   Do not output any new reasoning. Just provide the scores.
 
