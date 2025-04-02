@@ -1,4 +1,3 @@
-import datetime
 import json
 import re
 import time
@@ -16,7 +15,7 @@ from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
 # Import from scoring only what we need
-from scoring import extract_scores, process_scores
+from tinyhackathon.scoring import extract_scores, extract_submission_datetime, process_scores
 
 console = Console()
 
@@ -571,7 +570,7 @@ def eval_completions(
         # Log prompts and responses if log_file is provided
         if log_file:
             log_data = {
-                "timestamp": datetime.datetime.now().isoformat(),
+                "timestamp": extract_submission_datetime(submission_id),
                 "username": username,
                 "submission_id": submission_id,
                 "evaluations": [],

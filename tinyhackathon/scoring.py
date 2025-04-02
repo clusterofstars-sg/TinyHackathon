@@ -225,26 +225,34 @@ class ScoringTracker:
         return user_submissions.get(submission_id, {}).get("models", [])
 
     def mark_submission_scored(self, username: str, submission_id: str, model_name: str):
-        """Mark a submission as scored by a specific model.
+        """Mark a submission as scored with a specific model.
 
         Args:
-            username: The username of the submission
+            username: Username of the submitter
             submission_id: The ID of the submission
-            model_name: The name of the model that scored the submission
+            model_name: Name of the model used for scoring
         """
+        # Initialize user entry if needed
         if username not in self.state["scored_submissions"]:
             self.state["scored_submissions"][username] = {}
 
+        # Initialize submission entry if needed
         if submission_id not in self.state["scored_submissions"][username]:
-            self.state["scored_submissions"][username][submission_id] = {"timestamp": datetime.datetime.now().isoformat(), "models": []}
+            # Use extracted timestamp instead of current time
+            self.state["scored_submissions"][username][submission_id] = {
+                "timestamp": extract_submission_datetime(submission_id),
+                "models": [],
+            }
 
-        # Add the model to the list if it's not already there
+        # Add model to list if not already present
         models = self.state["scored_submissions"][username][submission_id].get("models", [])
         if model_name not in models:
             models.append(model_name)
             self.state["scored_submissions"][username][submission_id]["models"] = models
-            self.state["scored_submissions"][username][submission_id]["timestamp"] = datetime.datetime.now().isoformat()
+            # Update timestamp to use submission timestamp
+            self.state["scored_submissions"][username][submission_id]["timestamp"] = extract_submission_datetime(submission_id)
 
+        # Save the updated state
         self.save_state()
 
     def sync_with_repository(self, repo_id: str, api: HfApi):
@@ -346,7 +354,7 @@ class ScoringTracker:
                         if submission_id not in self.state["scored_submissions"][username]:
                             new_entries += 1
                             self.state["scored_submissions"][username][submission_id] = {
-                                "timestamp": datetime.datetime.now().isoformat(),
+                                "timestamp": extract_submission_datetime(submission_id),
                                 "models": model_names,
                             }
                         else:
@@ -356,7 +364,10 @@ class ScoringTracker:
                             if len(updated_models) > len(existing_models):
                                 new_entries += 1
                                 self.state["scored_submissions"][username][submission_id]["models"] = updated_models
-                                self.state["scored_submissions"][username][submission_id]["timestamp"] = datetime.datetime.now().isoformat()
+                                # Update timestamp to use submission timestamp
+                                self.state["scored_submissions"][username][submission_id]["timestamp"] = extract_submission_datetime(
+                                    submission_id
+                                )
 
             self.save_state()
             if new_entries > 0:
@@ -399,6 +410,29 @@ class ScoringTracker:
         except Exception as e:
             console.print(f"[red]Error uploading scoring state to repository: {e}[/red]")
             return False
+
+    def _merge_dictionaries(self, disk_state: Dict[str, Any]) -> None:
+        """Merge disk state with memory state."""
+        # Merge scored_submissions
+        if "scored_submissions" in disk_state:
+            for username, user_data in disk_state["scored_submissions"].items():
+                if username not in self.state["scored_submissions"]:
+                    self.state["scored_submissions"][username] = {}
+
+                for submission_id, submission_data in user_data.items():
+                    if submission_id not in self.state["scored_submissions"][username]:
+                        self.state["scored_submissions"][username][submission_id] = submission_data
+                    else:
+                        # Merge models lists
+                        disk_models = disk_state["scored_submissions"][username][submission_id].get("models", [])
+                        local_models = self.state["scored_submissions"][username][submission_id].get("models", [])
+                        combined_models = list(set(disk_models).union(set(local_models)))
+
+                        # Update models list
+                        self.state["scored_submissions"][username][submission_id]["models"] = combined_models
+
+                        # Update timestamp to use the submission date instead of current time
+                        self.state["scored_submissions"][username][submission_id]["timestamp"] = extract_submission_datetime(submission_id)
 
 
 def download_new_submissions(
@@ -499,6 +533,33 @@ def download_new_submissions(
     processed_file.write_text(json.dumps(list(processed)))
 
     return new_files
+
+
+def extract_submission_datetime(submission_id: str) -> str:
+    """Extract timestamp from submission ID using regex pattern.
+
+    Args:
+        submission_id: The submission ID string
+
+    Returns:
+        Formatted timestamp string from the submission ID (YYYY-MM-DD HH:MM),
+        or current time if no timestamp pattern found
+    """
+    # Use the same regex pattern from submission.py
+    timestamp_match = re.search(r"(\d{8}_\d{6})", submission_id)
+    if timestamp_match:
+        try:
+            ts_str = timestamp_match.group(1)
+            # Parse timestamp in format YYYYmmdd_HHMMSS
+            ts_datetime = datetime.datetime.strptime(ts_str, "%Y%m%d_%H%M%S")
+            # Format as YYYY-MM-DD HH:MM
+            return ts_datetime.strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            # If parsing fails, return current time in simplified format
+            return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    else:
+        # If no timestamp found, return current time in simplified format
+        return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
 def get_authenticated_api() -> HfApi:
@@ -981,8 +1042,8 @@ def update_user_score_history(
         if cols_to_drop:
             history_entry = history_entry.drop(columns=cols_to_drop)
 
-    # Add timestamp
-    history_entry["timestamp"] = datetime.datetime.now().isoformat()
+    # Add timestamp using submission_id instead of current time
+    history_entry["timestamp"] = extract_submission_datetime(submission_id)
 
     # Check if history file exists
     if history_path.exists():
@@ -1141,11 +1202,15 @@ def generate_global_leaderboard(base_dir: str = "submissions") -> pd.DataFrame:
             # Calculate total number of submissions for this user
             submission_count = len(history)
 
-            # Get submission timestamp
-            timestamp = best_submission["timestamp"] if "timestamp" in best_submission else ""
-
             # Get submission_id
             submission_id = best_submission["submission_id"] if "submission_id" in best_submission else ""
+
+            # Get submission timestamp - use the extracted timestamp from submission_id when possible
+            if "timestamp" in best_submission and best_submission["timestamp"]:
+                timestamp = best_submission["timestamp"]
+            else:
+                # Extract timestamp from submission_id if possible
+                timestamp = extract_submission_datetime(submission_id)
 
             # Get weight class
             weight_class = read_user_metadata(username, base_dir)
@@ -1615,7 +1680,9 @@ def generate_readme_leaderboard_section(leaderboard_dir: str = "leaderboards") -
         return "<!-- No leaderboard data available -->"
 
     # Generate timestamp
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+    # Use AOE (Anywhere on Earth, UTC-12) timezone for the leaderboard timestamp
+    aoe_timezone = datetime.datetime.timezone(datetime.timedelta(hours=-12))
+    timestamp = datetime.datetime.now(aoe_timezone).strftime("%Y-%m-%d %H:%M:%S AOE")
 
     # Define column order with overall first, then other categories
     score_categories = [ScoreCategory.OVERALL.lower()]
