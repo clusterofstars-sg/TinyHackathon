@@ -240,7 +240,7 @@ def process_submission(
             f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id][model_arch]['score']:.2f}[/green]"
         )
         console.print(
-            f"[blue]Stats: {total_items} items in {elapsed_time:.2f}s ({avg_time_per_item:.2f}s per item, {items_per_second:.2f} items/s)[/blue]"
+            f"[blue]Stats: {total_items} items in {elapsed_time:.2f}s ({avg_time_per_item:.2f}s per item, {items_per_second:.2f} items/s)[/blue]\n"
         )
 
     except Exception as e:
@@ -680,7 +680,7 @@ def score_submission(
     # Only load the model if neither generator nor model_arch is provided
     if generator is None and model_arch is None:
         generator, model_arch = load_model(model_dir, cache_size, draft_model_dir, draft_cache_size)
-        console.print(f"[green]Loaded model {model_arch} successfully[/green]")
+        console.print(f"[green]Loaded model {model_arch} successfully[/green]\n")
     # Handle case where one is provided but not the other
     elif generator is None:
         console.print(f"[yellow]Loading model (architecture {model_arch} specified but generator missing)...[/yellow]")

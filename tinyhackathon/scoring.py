@@ -2,10 +2,11 @@ import json
 import re
 import shutil
 import tempfile
+import time  # Import the time module
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, Dict, List, Optional, Tuple, Union
+from typing import Annotated, Any, Dict, List, Optional, Tuple, Union, Set
 
 # Import from llm_scoring
 import llm_scoring
@@ -557,6 +558,7 @@ def generate_model_dataframe(
     prompts: List[str],
     completions: List[str],
     item_scores: Dict[int, Dict[str, float]],
+    include_texts: bool = False,
 ) -> pd.DataFrame:
     """Generate a per-model DataFrame for a submission.
 
@@ -567,6 +569,7 @@ def generate_model_dataframe(
         prompts: List of prompts
         completions: List of completions
         item_scores: Dictionary mapping item IDs to score dictionaries
+        include_texts: Whether to include prompt and completion texts in the output
 
     Returns:
         DataFrame containing the scores
@@ -576,9 +579,12 @@ def generate_model_dataframe(
         if idx in item_scores:
             row = {
                 "item_id": idx,
-                "prompt": prompt,
-                "completion": completion,
             }
+            # Only include text data if requested
+            if include_texts:
+                row["prompt"] = prompt
+                row["completion"] = completion
+
             # Add all scores
             row.update(item_scores[idx])
             data.append(row)
@@ -625,7 +631,7 @@ def save_model_csv(
         console.print(f"[yellow]Per-model CSV already exists: {csv_path}[/yellow]")
         return csv_path
 
-    # Generate the DataFrame
+    # Generate the DataFrame without prompt and completion columns
     df = generate_model_dataframe(
         username=username,
         submission_id=submission_id,
@@ -633,6 +639,7 @@ def save_model_csv(
         prompts=prompts,
         completions=completions,
         item_scores=item_scores,
+        include_texts=False,  # Don't include prompt and completion texts
     )
 
     # Save the DataFrame to CSV
@@ -732,9 +739,6 @@ def calculate_submission_average(username: str, submission_id: str, base_dir: st
 
     # Add the overall average row at the top
     summary_df = pd.concat([overall_row, summary_df], ignore_index=True)
-
-    # Add num_models column to all model rows
-    summary_df["num_models"] = summary_df.apply(lambda x: num_models if x["model_name"] == "average" else 1, axis=1)
 
     return summary_df
 
@@ -982,6 +986,17 @@ def generate_global_leaderboard(base_dir: str = "submissions") -> pd.DataFrame:
             # Get number of models used for scoring
             num_models = best_submission.get("num_models", 0)
 
+            # If num_models is 0 or 1, try to calculate it directly
+            if num_models <= 1:
+                # Get the submission_id
+                submission_id = best_submission["submission_id"] if "submission_id" in best_submission else ""
+
+                if submission_id:
+                    # Find model CSV files to get actual model count
+                    model_csvs = find_model_csvs(username, submission_id, base_dir)
+                    if model_csvs:
+                        num_models = len(model_csvs)
+
             # Calculate total number of submissions for this user
             submission_count = len(history)
 
@@ -1136,13 +1151,13 @@ def generate_and_save_all_leaderboards(base_dir: str = "submissions", output_dir
         output_dir: Directory to save leaderboard files
 
     Returns:
-        Dictionary with paths to all saved files
+        pd.DataFrame: The global leaderboard DataFrame.
     """
     # Create output directory if it doesn't exist
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # Generate global leaderboard
-    global_leaderboard = generate_global_leaderboard(base_dir)
+    global_leaderboard = generate_global_leaderboard(base_dir=base_dir)
 
     if global_leaderboard.empty:
         console.print("[yellow]No data for leaderboards[/yellow]")
@@ -1199,33 +1214,19 @@ def upload_user_files(
 
     # Upload user metadata if it exists
     metadata_path = user_dir / "metadata.json"
-    if metadata_path.exists() and tracker.should_upload_file(metadata_path):
-        try:
-            remote_path = f"submissions/{username}/metadata.json"
-            api.upload_file(path_or_fileobj=str(metadata_path), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
-            tracker.mark_file_uploaded(metadata_path)
-            results["uploaded"] += 1
-            console.print(f"[green]Uploaded {metadata_path} to {remote_path}[/green]")
-        except Exception as e:
-            console.print(f"[red]Error uploading {metadata_path}: {e}[/red]")
-            results["error"] += 1
-    elif metadata_path.exists():
-        results["skipped"] += 1
+    if metadata_path.exists():
+        remote_path = f"submissions/{username}"
+        results = upload_with_folder_fallback(
+            api=api, local_path=metadata_path, remote_path=remote_path, repo_id=repo_id, tracker=tracker, results=results
+        )
 
     # Upload score history if it exists
     history_path = user_dir / "score_history.csv"
-    if history_path.exists() and tracker.should_upload_file(history_path):
-        try:
-            remote_path = f"submissions/{username}/score_history.csv"
-            api.upload_file(path_or_fileobj=str(history_path), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
-            tracker.mark_file_uploaded(history_path)
-            results["uploaded"] += 1
-            console.print(f"[green]Uploaded {history_path} to {remote_path}[/green]")
-        except Exception as e:
-            console.print(f"[red]Error uploading {history_path}: {e}[/red]")
-            results["error"] += 1
-    elif history_path.exists():
-        results["skipped"] += 1
+    if history_path.exists():
+        remote_path = f"submissions/{username}"
+        results = upload_with_folder_fallback(
+            api=api, local_path=history_path, remote_path=remote_path, repo_id=repo_id, tracker=tracker, results=results
+        )
 
     # Handle submission files
     if submission_id:
@@ -1260,45 +1261,103 @@ def _upload_submission_folder(
     Returns:
         Updated upload metrics dictionary
     """
-    # Count files to be uploaded for metrics
-    csv_files = list(submission_dir.glob("*.csv"))
+    # Set the remote path for this submission
+    remote_path = f"submissions/{username}/{submission_id}"
 
-    # Check if any files need uploading using tracker
-    files_to_upload = [f for f in csv_files if tracker.should_upload_file(f)]
+    # Use the consolidated upload helper with CSV file pattern
+    return upload_with_folder_fallback(
+        api=api, local_path=submission_dir, remote_path=remote_path, repo_id=repo_id, tracker=tracker, file_pattern="*.csv", results=results
+    )
 
-    if not files_to_upload:
-        # Update skipped count
-        results["skipped"] += len(csv_files)
-        return results
 
-    try:
-        # Upload the entire submission folder at once
-        remote_path = f"submissions/{username}/{submission_id}"
-        _ = api.upload_folder(folder_path=str(submission_dir), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
+def upload_with_folder_fallback(
+    api: HfApi,
+    local_path: Path,
+    remote_path: str,
+    repo_id: str,
+    tracker: UploadTracker,
+    file_pattern: str = "*",
+    results: Optional[Dict[str, int]] = None,
+) -> Dict[str, int]:
+    """Helper function to upload files with folder-level upload and individual file fallback.
 
-        # Mark all files as uploaded
-        for file_path in csv_files:
-            tracker.mark_file_uploaded(file_path)
+    This consolidates the common upload pattern used throughout the codebase.
 
-        # Count newly uploaded files for metrics
-        results["uploaded"] += len(files_to_upload)
-        console.print(f"[green]Uploaded submission folder {submission_dir} to {remote_path}[/green]")
-    except Exception as e:
-        console.print(f"[red]Error uploading submission folder {submission_dir}: {e}[/red]")
-        results["error"] += 1
+    Args:
+        api: Authenticated Hugging Face API client
+        local_path: Path to local directory or file to upload
+        remote_path: Path in the repository where files should be uploaded
+        repo_id: Hugging Face repository ID
+        tracker: Upload tracker to avoid redundant uploads
+        file_pattern: Glob pattern to filter files (default: "*" for all files)
+        results: Optional existing results dictionary to update
 
-        # Try individual files as fallback
-        console.print("[yellow]Attempting individual file uploads as fallback...[/yellow]")
-        for file_path in files_to_upload:
-            try:
-                remote_file_path = f"submissions/{username}/{submission_id}/{file_path.name}"
-                api.upload_file(path_or_fileobj=str(file_path), path_in_repo=remote_file_path, repo_id=repo_id, repo_type="dataset")
+    Returns:
+        Dictionary with counts of uploaded files, skipped files, and errors
+    """
+    if results is None:
+        results = {"uploaded": 0, "skipped": 0, "error": 0}
+
+    # Handle directory vs file
+    if local_path.is_dir():
+        # Get all files matching the pattern
+        all_files = list(local_path.glob(file_pattern))
+
+        # Filter to files that need uploading
+        files_to_upload = [f for f in all_files if tracker.should_upload_file(f)]
+
+        if not files_to_upload:
+            # Nothing needs uploading
+            results["skipped"] += len(all_files)
+            return results
+
+        try:
+            # Try bulk folder upload first
+            _ = api.upload_folder(folder_path=str(local_path), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
+
+            # Mark all files as uploaded
+            for file_path in all_files:
                 tracker.mark_file_uploaded(file_path)
+
+            # Update metrics
+            results["uploaded"] += len(files_to_upload)
+            console.print(f"[green]Uploaded folder {local_path} to {remote_path}[/green]")
+
+        except Exception as e:
+            console.print(f"[red]Error uploading folder {local_path}: {e}[/red]")
+            results["error"] += 1
+
+            # Try individual files as fallback
+            console.print("[yellow]Attempting individual file uploads as fallback...[/yellow]")
+            for file_path in files_to_upload:
+                try:
+                    # Determine relative path for the file
+                    rel_path = file_path.relative_to(local_path)
+                    file_remote_path = f"{remote_path}/{rel_path}" if remote_path else str(rel_path)
+
+                    api.upload_file(path_or_fileobj=str(file_path), path_in_repo=file_remote_path, repo_id=repo_id, repo_type="dataset")
+                    tracker.mark_file_uploaded(file_path)
+                    results["uploaded"] += 1
+                    console.print(f"[green]Uploaded {file_path} to {file_remote_path}[/green]")
+                except Exception as e2:
+                    console.print(f"[red]Error uploading {file_path}: {e2}[/red]")
+                    results["error"] += 1
+    else:
+        # Handle single file upload
+        if tracker.should_upload_file(local_path):
+            try:
+                # For a single file, determine the remote path
+                file_remote_path = f"{remote_path}/{local_path.name}" if remote_path else local_path.name
+
+                api.upload_file(path_or_fileobj=str(local_path), path_in_repo=file_remote_path, repo_id=repo_id, repo_type="dataset")
+                tracker.mark_file_uploaded(local_path)
                 results["uploaded"] += 1
-                console.print(f"[green]Uploaded {file_path} to {remote_file_path}[/green]")
-            except Exception as e2:
-                console.print(f"[red]Error uploading {file_path}: {e2}[/red]")
+                console.print(f"[green]Uploaded {local_path} to {file_remote_path}[/green]")
+            except Exception as e:
+                console.print(f"[red]Error uploading {local_path}: {e}[/red]")
                 results["error"] += 1
+        else:
+            results["skipped"] += 1
 
     return results
 
@@ -1369,65 +1428,19 @@ def upload_leaderboards(
     # Create upload tracker
     is_test_mode = "Test" in repo_id
     tracker = UploadTracker(is_test_mode=is_test_mode)
-    results = {"uploaded": 0, "skipped": 0, "error": 0}
 
-    # Find all leaderboard CSV files
-    leaderboard_patterns = [
-        "leaderboard_global.csv",
-        "leaderboard_small.csv",
-        "leaderboard_medium.csv",
-        "leaderboard_large.csv",
-    ]
+    # Define leaderboard file patterns to look for
+    file_pattern = "leaderboard_*.csv"
 
-    # Gather leaderboard files to check if they need updating
-    leaderboard_files = []
-    for pattern in leaderboard_patterns:
-        found_files = list(leaderboard_path.glob(pattern))
-        leaderboard_files.extend(found_files)
-
-    # Check if there are any files to upload
-    files_to_upload = [f for f in leaderboard_files if tracker.should_upload_file(f)]
-
-    if not files_to_upload:
-        results["skipped"] = len(leaderboard_files)
-        console.print(f"[yellow]All {len(leaderboard_files)} leaderboard files already up to date[/yellow]")
-        return results
-
-    try:
-        # Upload the entire leaderboard directory directly
-        api.upload_folder(
-            folder_path=str(leaderboard_path),
-            path_in_repo="",  # Upload to root
-            repo_id=repo_id,
-            repo_type="dataset",
-        )
-
-        # Mark all files as uploaded
-        for file_path in files_to_upload:
-            tracker.mark_file_uploaded(file_path)
-
-        # Count uploaded files
-        results["uploaded"] = len(files_to_upload)
-        console.print(f"[green]Uploaded {len(files_to_upload)} leaderboard files[/green]")
-
-    except Exception as e:
-        console.print(f"[red]Error uploading leaderboard files using upload_folder: {e}[/red]")
-        console.print("[yellow]Falling back to individual file uploads...[/yellow]")
-
-        # Fall back to individual uploads
-        for file_path in files_to_upload:
-            if tracker.should_upload_file(file_path):
-                try:
-                    remote_path = file_path.name
-                    api.upload_file(path_or_fileobj=str(file_path), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
-                    tracker.mark_file_uploaded(file_path)
-                    results["uploaded"] += 1
-                    console.print(f"[green]Uploaded {file_path} to {remote_path}[/green]")
-                except Exception as e:
-                    console.print(f"[red]Error uploading {file_path}: {e}[/red]")
-                    results["error"] += 1
-            else:
-                results["skipped"] += 1
+    # Use the consolidated upload helper
+    results = upload_with_folder_fallback(
+        api=api,
+        local_path=leaderboard_path,
+        remote_path="",  # Upload to root
+        repo_id=repo_id,
+        tracker=tracker,
+        file_pattern=file_pattern,
+    )
 
     console.print(
         f"[blue]Leaderboard upload summary: {results['uploaded']} files uploaded, "
@@ -1485,6 +1498,10 @@ def generate_readme_leaderboard_section(leaderboard_dir: str = "leaderboards") -
         if col in global_display_df.columns:
             global_display_df[col] = global_display_df[col].map(lambda x: f"{float(x):.2f}")
 
+    # Format integer columns
+    if "num_models" in global_display_df.columns:
+        global_display_df["num_models"] = global_display_df["num_models"].map(lambda x: int(x))
+
     # Generate global leaderboard markdown
     global_md = global_display_df.to_markdown(index=False, tablefmt="pipe")
 
@@ -1522,6 +1539,10 @@ def generate_readme_leaderboard_section(leaderboard_dir: str = "leaderboards") -
                 for col in score_categories:
                     if col in display_df.columns:
                         display_df[col] = display_df[col].map(lambda x: f"{float(x):.2f}")
+
+                # Format integer columns
+                if "num_models" in display_df.columns:
+                    display_df["num_models"] = display_df["num_models"].map(lambda x: int(x))
 
                 # Generate the markdown table
                 table_md = display_df.to_markdown(index=False, tablefmt="pipe")
@@ -1762,48 +1783,35 @@ def download_existing_scores(
 
     # Download all summary files first
     console.print("[yellow]Downloading submission summaries and model scores...[/yellow]")
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TimeElapsedColumn(),
-    ) as progress:
-        task = progress.add_task("Downloading...", total=len(files))
+    for file_path in files:
+        # Only process files in the submissions directory
+        if not file_path.startswith("submissions/"):
+            continue
 
-        for file_path in files:
-            # Only process files in the submissions directory
-            if not file_path.startswith("submissions/"):
-                progress.update(task, advance=1)
-                continue
+        # Extract parts
+        parts = file_path.split("/")
+        if len(parts) < 4:
+            continue
 
-            # Extract parts
-            parts = file_path.split("/")
-            if len(parts) < 4:
-                progress.update(task, advance=1)
-                continue
+        username = parts[1]
+        submission_id = parts[2]
+        filename = parts[3]
 
-            username = parts[1]
-            submission_id = parts[2]
-            filename = parts[3]
+        # Create directory structure
+        submission_dir = Path(base_dir) / username / submission_id
+        submission_dir.mkdir(parents=True, exist_ok=True)
 
-            # Create directory structure
-            submission_dir = Path(base_dir) / username / submission_id
-            submission_dir.mkdir(parents=True, exist_ok=True)
-
-            # Download the file
-            local_path = submission_dir / filename
-            try:
-                if not local_path.exists():
-                    _ = api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=file_path, local_dir=Path(base_dir))
-                    results["downloaded"] += 1
-                else:
-                    results["skipped"] += 1
-            except Exception as e:
-                console.print(f"[red]Error downloading {file_path}: {e}[/red]")
-                results["error"] += 1
-
-            progress.update(task, advance=1)
+        # Download the file
+        local_path = submission_dir / filename
+        try:
+            if not local_path.exists():
+                _ = api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=file_path, local_dir=Path(base_dir))
+                results["downloaded"] += 1
+            else:
+                results["skipped"] += 1
+        except Exception as e:
+            console.print(f"[red]Error downloading {file_path}: {e}[/red]")
+            results["error"] += 1
 
     # Download user histories
     for username in scored_submissions:
@@ -1844,12 +1852,650 @@ def download_existing_scores(
     return results
 
 
+class EnvConfig:
+    """Configuration object for environment settings.
+
+    This class consolidates various environment flags into a single object
+    to simplify environment mode handling throughout the codebase.
+    """
+
+    def __init__(self, is_test_mode: bool, sub_test_override: Optional[bool] = None, score_test_override: Optional[bool] = None):
+        """Initialize environment configuration.
+
+        Args:
+            is_test_mode: Base test mode setting (True for test mode, False for production)
+            sub_test_override: Optional override for submissions repository test mode
+            score_test_override: Optional override for scores repository test mode
+        """
+        # Base test mode setting
+        self.is_test_mode = is_test_mode
+
+        # Apply overrides if specified, otherwise use the base setting
+        self.use_test_sub = sub_test_override if sub_test_override is not None else is_test_mode
+        self.use_test_score = score_test_override if score_test_override is not None else is_test_mode
+
+        # Set repository IDs based on test mode settings
+        self.submissions_repo_id = (
+            "cluster-of-stars/TinyStoriesHackathon_Submissions_Test"
+            if self.use_test_sub
+            else "cluster-of-stars/TinyStoriesHackathon_Submissions"
+        )
+
+        self.scores_repo_id = (
+            "cluster-of-stars/TinyStoriesHackathon_Scores_Test" if self.use_test_score else "cluster-of-stars/TinyStoriesHackathon_Scores"
+        )
+
+        # Set download directories
+        self.submission_dir = "downloaded_submissions_test" if self.use_test_sub else "downloaded_submissions"
+        self.scores_dir = "scores_test" if self.use_test_score else "scores"
+
+    def __str__(self) -> str:
+        """Return string representation of the configuration."""
+        mode = "TEST" if self.is_test_mode else "PRODUCTION"
+        sub_mode = "TEST" if self.use_test_sub else "PRODUCTION"
+        score_mode = "TEST" if self.use_test_score else "PRODUCTION"
+
+        return (
+            f"Environment: {mode} mode\n"
+            f"  Submissions: {sub_mode} mode - {self.submissions_repo_id}\n"
+            f"  Scores: {score_mode} mode - {self.scores_repo_id}\n"
+            f"  Directories: {self.submission_dir}, {self.scores_dir}"
+        )
+
+
 # Add Typer CLI
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 
 
+def setup_environment(
+    mode: bool, sub_test: Optional[bool], score_test: Optional[bool], model_dir: Optional[Path], model_dirs: Optional[List[Path]]
+) -> Tuple[EnvConfig, List[Path], List[str]]:
+    """Set up the environment configuration and model directories.
+
+    This function handles the environment configuration setup, model directory
+    validation, and model name extraction.
+
+    Args:
+        mode: True for production mode (--submit), False for test mode (--test)
+        sub_test: Override for submission repository test mode
+        score_test: Override for scores repository test mode
+        model_dir: Single model directory (deprecated)
+        model_dirs: List of model directories to use
+
+    Returns:
+        Tuple containing:
+        - EnvConfig: The environment configuration
+        - List[Path]: List of model directories to use
+        - List[str]: List of model names (derived from directory names)
+    """
+    # Create environment configuration
+    is_test_mode = not mode  # False = test, True = submit
+    env_config = EnvConfig(is_test_mode=is_test_mode, sub_test_override=sub_test, score_test_override=score_test)
+
+    # Print environment status
+    console.print(f"[bold {'yellow' if is_test_mode else 'green'}]{env_config}[/bold {'yellow' if is_test_mode else 'green'}]")
+
+    # Handle backward compatibility for model_dir vs model_dirs
+    if model_dirs is None:
+        if model_dir is None:
+            console.print("[red]Error: At least one model directory must be provided via --model-dir or --model-dirs[/red]")
+            raise ValueError("No model directory provided")
+        model_dirs = [model_dir]
+    elif model_dir is not None:
+        # Both were provided, prioritize model_dirs but warn
+        console.print("[yellow]Warning: Both --model-dir and --model-dirs provided. Using --model-dirs and ignoring --model-dir.[/yellow]")
+
+    # Extract model names (use directory basename)
+    model_names = [Path(d).name for d in model_dirs]
+    console.print(f"[blue]Using {len(model_names)} judging models: {', '.join(model_names)}[/blue]")
+
+    return env_config, model_dirs, model_names
+
+
+def setup_api_client(upload: bool) -> Optional[HfApi]:
+    """Set up the Hugging Face API client for uploads if requested.
+
+    This function handles authentication with HuggingFace and returns
+    an authenticated API client if successful.
+
+    Args:
+        upload: Whether uploads are enabled (if False, returns None)
+
+    Returns:
+        Optional[HfApi]: Authenticated API client if upload is True and
+        authentication succeeds, None otherwise
+    """
+    if not upload:
+        console.print("[yellow]Upload is disabled, skipping API authentication[/yellow]")
+        return None
+
+    try:
+        _, api = get_hf_user()
+        console.print("[green]Successfully authenticated with Hugging Face[/green]")
+        return api
+    except Exception as e:
+        console.print(f"[red]Error authenticating with Hugging Face: {e}[/red]")
+        console.print("[red]Continuing without upload capability[/red]")
+        return None
+
+
+def download_submissions_and_scores(
+    env_config: EnvConfig, submission_dir: str, scores_dir: str, api_client: Optional[HfApi] = None
+) -> Dict[str, Any]:
+    """Download new submissions and existing scores.
+
+    This function handles downloading new submissions from the submissions repository
+    and existing scores from the scores repository.
+
+    Args:
+        env_config: Environment configuration
+        submission_dir: Directory to save downloaded submissions
+        scores_dir: Directory to save scores
+        api_client: Optional authenticated API client (required for downloading scores)
+
+    Returns:
+        Dictionary containing information about downloaded submissions and scores
+    """
+    result = {"new_submissions": [], "scores_downloaded": False, "submission_dir": submission_dir, "scores_dir": scores_dir}
+
+    # Create necessary directories
+    Path(submission_dir).mkdir(exist_ok=True, parents=True)
+    Path(scores_dir).mkdir(exist_ok=True, parents=True)
+
+    # Download new submissions
+    console.print(f"[yellow]Downloading new submissions from {env_config.submissions_repo_id}...[/yellow]")
+    try:
+        new_submissions = download_new_submissions(
+            dataset_id=env_config.submissions_repo_id, output_dir=submission_dir, is_test_mode=env_config.use_test_sub
+        )
+
+        if new_submissions:
+            console.print(f"[green]Downloaded {len(new_submissions)} new submissions[/green]")
+            result["new_submissions"] = new_submissions
+        else:
+            console.print("[yellow]No new submissions to download[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Error downloading new submissions: {e}[/red]")
+        # Continue with existing submissions if download fails
+
+    # Download existing scores if API client is available
+    if api_client is not None:
+        try:
+            # Initial download of existing scores to:
+            # 1. Avoid duplicate work by having local copies of already scored submissions
+            # 2. Ensure we have the most current state before determining which submissions need scoring
+            # 3. This is especially important in collaborative environments where multiple scorers may be working
+            download_stats = download_existing_scores(
+                repo_id=env_config.scores_repo_id, base_dir=scores_dir, is_test_mode=env_config.use_test_score
+            )
+
+            result["scores_downloaded"] = True
+            result["download_stats"] = download_stats
+        except Exception as e:
+            console.print(f"[yellow]Could not download existing scores: {e}[/yellow]")
+    else:
+        console.print("[yellow]No API client available, skipping score download[/yellow]")
+
+    return result
+
+
+def find_unscored_submissions(
+    submission_dir: Union[str, Path], scores_dir: Union[str, Path], model_names: List[str]
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Find submissions that need to be scored by each model.
+
+    This function scans the submissions directory to identify which
+    submissions have not yet been scored by which models.
+
+    Args:
+        submission_dir: Directory containing submissions
+        scores_dir: Directory containing scores
+        model_names: List of model names to check
+
+    Returns:
+        Dictionary mapping model names to lists of submissions that need scoring
+    """
+    # Convert paths to Path objects if they aren't already
+    submission_dir = Path(submission_dir)
+    scores_dir = Path(scores_dir)
+
+    # Initialize a dictionary to store unscored submissions for each model
+    unscored_files_by_model = {model_name: [] for model_name in model_names}
+
+    # Use a simple message instead of an indeterminate progress bar
+    console.print("[yellow]Scanning for unscored submissions...[/yellow]")
+
+    submission_count = 0
+    unscored_count = 0
+
+    # Get list of all CSV files in the submissions directory
+    for user_dir in submission_dir.glob("*"):
+        if not user_dir.is_dir():
+            continue
+
+        for csv_file in user_dir.glob("*.csv"):
+            # Skip summary files
+            if csv_file.name == "submission_summary.csv" or csv_file.name == "score_history.csv":
+                continue
+
+            username = user_dir.name
+            submission_id = csv_file.stem
+            submission_count += 1
+
+            # Check which models need to score this submission
+            for model_name in model_names:
+                # Check if this model has already scored this submission
+                if not is_submission_scored(username, submission_id, model_name, base_dir=scores_dir):
+                    unscored_files_by_model[model_name].append(
+                        {
+                            "username": username,
+                            "submission_id": submission_id,
+                            "csv_path": csv_file,
+                        }
+                    )
+                    unscored_count += 1
+
+    console.print("[green]Completed scanning for unscored submissions[/green]")
+
+    # Print a summary of what needs to be scored
+    for model_name, unscored_files in unscored_files_by_model.items():
+        console.print(f"[green]Model {model_name}: Found {len(unscored_files)} submissions needing scoring[/green]")
+
+    console.print(f"[blue]Total submissions: {submission_count}, Total unscored items: {unscored_count}[/blue]\n")
+
+    return unscored_files_by_model
+
+
+def score_submissions(
+    unscored_files_by_model: Dict[str, List[Dict[str, Any]]],
+    model_dirs: List[Path],
+    model_names: List[str],
+    scores_dir: Path,
+    max_new_tokens: int = 1024,
+    temperature: float = 1.0,
+    top_p: float = 1.0,
+    cache_size: int = 1024 * 50,
+    prompt_file: str = "prompts/simple_prompt.yaml",
+    reasoning_template: Optional[str] = None,
+    log_prompts: bool = False,
+    test_samples: Optional[int] = None,
+    draft_model_dir: Optional[Path] = None,
+    draft_cache_size: Optional[int] = None,
+) -> Set[Tuple[str, str]]:
+    """Score submissions with the specified models.
+
+    This function handles running models on submissions that need scoring,
+    and saving the results to CSV files.
+
+    Args:
+        unscored_files_by_model: Dictionary mapping model names to lists of submissions needing scoring
+        model_dirs: List of model directories
+        model_names: List of model names
+        scores_dir: Directory to save score results
+        max_new_tokens: Maximum tokens to generate
+        temperature: Temperature for text generation
+        top_p: Top-p sampling value
+        cache_size: Cache size in tokens for model
+        prompt_file: Path to file with evaluation prompts
+        reasoning_template: Path to reasoning template YAML file for deep reasoning models
+        log_prompts: Whether to log prompts and responses
+        test_samples: Number of samples to test per submission (if specified)
+        draft_model_dir: Directory for draft model (speculative decoding)
+        draft_cache_size: Cache size for draft model
+
+    Returns:
+        Set of tuples (username, submission_id) for successfully scored submissions
+    """
+    # Initialize set to track successfully scored submissions
+    successfully_scored_submissions = set()
+
+    # Process each model separately
+    for model_idx, model_name in enumerate(model_names):
+        model_dir = model_dirs[model_idx]
+        unscored_files = unscored_files_by_model[model_name]
+
+        if not unscored_files:
+            console.print(f"[yellow]No unscored submissions for model {model_name}. Skipping.[/yellow]")
+            continue
+
+        console.print(f"[yellow]Processing {len(unscored_files)} submissions with model {model_name}...[/yellow]")
+
+        if test_samples:
+            console.print(f"[yellow]Limiting to {test_samples} samples per submission for testing[/yellow]")
+
+        all_scores = {}
+
+        try:
+            # Score all submissions at once
+            all_scores = llm_scoring.score_submission(
+                submission_file=[item["csv_path"] for item in unscored_files],
+                model_dir=model_dir,
+                temperature=temperature,
+                top_p=top_p,
+                max_new_tokens=max_new_tokens,
+                cache_size=cache_size,
+                log_prompts=log_prompts,
+                prompt_file=prompt_file,
+                sample=test_samples,
+                draft_model_dir=draft_model_dir,
+                draft_cache_size=draft_cache_size,
+                reasoning_template=reasoning_template,
+            )
+        except Exception as e:
+            console.print(f"[red]Error scoring submissions with {model_name}: {e}[/red]")
+            continue
+
+        for item in unscored_files:
+            username = item["username"]
+            submission_id = item["submission_id"]
+            csv_path = item["csv_path"]
+
+            if username in all_scores and submission_id in all_scores[username]:
+                # Read original submission to get prompts and completions
+                try:
+                    df = pd.read_csv(csv_path)
+                    if "prompt" not in df.columns or "completion" not in df.columns:
+                        console.print(f"[red]Error: Missing required columns in {csv_path}. Skipping.[/red]")
+                        continue
+
+                    prompts = df["prompt"].tolist()
+                    completions = df["completion"].tolist()
+
+                    # Extract scores for this submission
+                    submission_scores = all_scores[username][submission_id]
+
+                    # Get this model's results
+                    current_model_name = list(submission_scores.keys())[0]  # We'll rename this to our model_name
+                    item_scores = submission_scores[current_model_name]["details"]
+
+                    # Validate item scores
+                    if not item_scores:
+                        console.print(f"[red]Error: No valid scores for {username}/{submission_id} with model {model_name}. Skipping.[/red]")  # fmt: skip
+                        continue
+
+                    # Create a dictionary of item_id to scores
+                    item_scores_dict = {entry["item_id"]: entry["scores"] for entry in item_scores}
+
+                    # Verify scores contain actual values
+                    if not any(scores for scores in item_scores_dict.values()):
+                        console.print(f"[red]Error: Empty scores for {username}/{submission_id} with model {model_name}. Skipping.[/red]")
+                        continue
+
+                    # Save model CSV with our defined model_name
+                    saved_path = save_model_csv(
+                        username=username,
+                        submission_id=submission_id,
+                        model_name=model_name,  # Use our defined model name
+                        prompts=prompts,
+                        completions=completions,
+                        item_scores=item_scores_dict,
+                        base_dir=scores_dir,
+                        overwrite=True,
+                    )
+
+                    # Verify the CSV was written with actual data
+                    if saved_path.exists():
+                        try:
+                            saved_df = pd.read_csv(saved_path)
+                            if not saved_df.empty and any(col.lower() in saved_df.columns for col in ScoreCategory):
+                                # Add to successfully scored submissions
+                                successfully_scored_submissions.add((username, submission_id))
+                            else:
+                                console.print(f"[red]Error: Saved CSV {saved_path} is empty or missing score columns. Skipping.[/red]")  # fmt: skip
+                        except Exception as e:
+                            console.print(f"[red]Error validating saved CSV {saved_path}: {e}. Skipping.[/red]")
+                    else:
+                        console.print(f"[red]Error: Failed to save CSV for {username}/{submission_id} with model {model_name}. Skipping.[/red]")  # fmt: skip
+
+                except Exception as e:
+                    console.print(f"[red]Error processing {username}/{submission_id} with model {model_name}: {e}. Skipping.[/red]")
+
+        console.print(f"[green]Completed scoring with model {model_name}[/green]")
+
+    # Check if we have any successfully scored submissions
+    if not successfully_scored_submissions:
+        console.print("[yellow]No submissions were successfully scored.[/yellow]")
+    else:
+        console.print(f"[green]Successfully scored {len(successfully_scored_submissions)} submissions[/green]")
+
+    return successfully_scored_submissions
+
+
+def generate_summaries_and_history(
+    scored_submissions: Set[Tuple[str, str]], scores_dir: Union[Path, str], overwrite: bool = False, repo_id: Optional[str] = None
+) -> Dict[str, List[Path]]:
+    """Generate submission summaries and update score history for scored submissions.
+
+    This function generates summary files for each scored submission and updates
+    the user's score history with the new results.
+
+    Args:
+        scored_submissions: Set of (username, submission_id) tuples for successfully scored submissions
+        scores_dir: Directory containing the scored results
+        overwrite: Whether to overwrite existing summary files
+        repo_id: Repository ID for including in paths (optional)
+
+    Returns:
+        Dictionary containing lists of generated summary and history files
+    """
+    scores_dir = Path(scores_dir)
+
+    # Initialize result tracking
+    results = {"summary_files": [], "history_files": []}
+
+    if not scored_submissions:
+        console.print("[yellow]No submissions to generate summaries for.[/yellow]")
+        return results
+
+    console.print(f"[yellow]Generating summaries and updating history for {len(scored_submissions)} submissions...[/yellow]")
+
+    for username, submission_id in scored_submissions:
+        try:
+            # Generate and save submission summary
+            summary_path = save_submission_summary(
+                username=username, submission_id=submission_id, base_dir=scores_dir, overwrite=overwrite, repo_id=repo_id
+            )
+
+            if summary_path:
+                results["summary_files"].append(summary_path)
+
+                # Check if the summary CSV was successfully created
+                try:
+                    summary_df = pd.read_csv(summary_path)
+
+                    # Update user score history
+                    history_path = update_user_score_history(
+                        username=username,
+                        submission_id=submission_id,
+                        summary_df=summary_df,
+                        base_dir=scores_dir,
+                        overwrite=True,  # Always overwrite history to ensure latest
+                    )
+
+                    if history_path:
+                        results["history_files"].append(history_path)
+                    else:
+                        console.print(f"[red]Failed to update history for {username}/{submission_id}[/red]")
+
+                except Exception as e:
+                    console.print(f"[red]Error reading summary file for history update ({username}/{submission_id}): {e}[/red]")
+
+            else:
+                console.print(f"[red]Failed to generate summary for {username}/{submission_id}[/red]")
+
+        except Exception as e:
+            console.print(f"[red]Error processing summary/history for {username}/{submission_id}: {e}[/red]")
+
+    # Report results
+    console.print(f"[green]Generated {len(results['summary_files'])} summary files[/green]")
+    console.print(f"[green]Updated {len(results['history_files'])} history files[/green]")
+
+    return results
+
+
+def generate_and_upload_leaderboards(
+    scores_dir: Union[Path, str],
+    leaderboard_dir: Union[Path, str] = "leaderboards",
+    upload: bool = False,
+    api_client: Optional[HfApi] = None,
+    repo_id: Optional[str] = None,
+    update_readme: bool = True,
+    force_readme_update: bool = False,
+) -> Dict[str, Any]:
+    """Generate leaderboards and optionally upload them to Hugging Face.
+
+    This function generates global and weight class leaderboards, saves them to files,
+    and optionally uploads them to Hugging Face. It can also update the README file.
+
+    Args:
+        scores_dir: Directory containing score files
+        leaderboard_dir: Directory to save leaderboard files
+        upload: Whether to upload leaderboards
+        api_client: Authenticated Hugging Face API client (required if upload=True)
+        repo_id: Repository ID for uploads (required if upload=True)
+        update_readme: Whether to update the repository README
+        force_readme_update: Whether to force README update regardless of time interval
+
+    Returns:
+        Dictionary with results including leaderboard data and upload statistics
+    """
+    # Convert paths to Path objects
+    scores_dir = Path(scores_dir)
+    leaderboard_dir = Path(leaderboard_dir)
+
+    # Create leaderboard directory if it doesn't exist
+    leaderboard_dir.mkdir(parents=True, exist_ok=True)
+
+    # Initialize results dictionary
+    results = {
+        "leaderboard": None,
+        "weight_class_leaderboards": {},
+        "saved_files": {},
+        "upload_stats": {"files": 0, "errors": 0},
+        "readme_updated": False,
+    }
+
+    console.print("[yellow]Generating leaderboards...[/yellow]")
+
+    try:
+        # Step 1: Generate global leaderboard
+        global_leaderboard = generate_global_leaderboard(base_dir=scores_dir)
+        results["leaderboard"] = global_leaderboard
+
+        if global_leaderboard.empty:
+            console.print("[yellow]Global leaderboard is empty. No score data found.[/yellow]")
+            return results
+
+        # Display a preview of the leaderboard
+        display_leaderboard_preview(global_leaderboard)
+
+        # Step 2: Generate weight class leaderboards
+        weight_class_leaderboards = generate_weight_class_leaderboards(global_leaderboard)
+        results["weight_class_leaderboards"] = weight_class_leaderboards
+
+        # Step 3: Save global leaderboard
+        global_leaderboard_files = save_global_leaderboard(global_leaderboard, base_dir=leaderboard_dir)
+        results["saved_files"]["global"] = global_leaderboard_files
+
+        # Step 4: Save weight class leaderboards
+        weight_class_files = save_weight_class_leaderboards(weight_class_leaderboards, base_dir=leaderboard_dir)
+        results["saved_files"]["weight_classes"] = weight_class_files
+
+        # Step 5: Upload leaderboards if requested
+        if upload:
+            if api_client is None or repo_id is None:
+                console.print("[red]Cannot upload leaderboards: Missing API client or repository ID[/red]")
+            else:
+                console.print(f"[yellow]Uploading leaderboards to {repo_id}...[/yellow]")
+                tracker = UploadTracker(is_test_mode=repo_id.endswith("Test"))
+
+                upload_stats = upload_leaderboards(leaderboard_dir=leaderboard_dir, repo_id=repo_id)
+                results["upload_stats"] = upload_stats
+
+                # Update README if requested and uploads were successful
+                if update_readme and upload_stats["uploaded"] > 0:
+                    readme_updated = update_repository_readme(
+                        leaderboard_dir=leaderboard_dir, repo_id=repo_id, force_update=force_readme_update
+                    )
+                    results["readme_updated"] = readme_updated
+
+                    if readme_updated:
+                        console.print("[green]Repository README updated with latest leaderboard[/green]")
+                    else:
+                        console.print("[yellow]Repository README not updated (not needed or failed)[/yellow]")
+
+    except Exception as e:
+        console.print(f"[red]Error generating or uploading leaderboards: {e}[/red]")
+        import traceback
+
+        console.print(traceback.format_exc())
+
+    # Final status report
+    file_count = 0
+    for files_dict in results["saved_files"].values():
+        file_count += len(files_dict)
+
+    console.print(f"[green]Generated and saved {file_count} leaderboard files[/green]")
+
+    if upload and results.get("upload_stats") and isinstance(results["upload_stats"], dict):
+        stats = results["upload_stats"]
+        console.print(f"[green]Uploaded {stats.get('uploaded', 0)} files to repository[/green]")
+        if stats.get("error", 0) > 0:
+            console.print(f"[red]Encountered {stats.get('error', 0)} errors during upload[/red]")
+
+    return results
+
+
+def upload_results(
+    scored_submissions: Set[Tuple[str, str]], scores_dir: Union[Path, str], repo_id: str, api_client: Optional[HfApi] = None
+) -> Dict[str, int]:
+    """Upload scored submission files to Hugging Face.
+
+    This function handles uploading user score files for all successfully
+    scored submissions to the specified repository.
+
+    Args:
+        scored_submissions: Set of (username, submission_id) tuples to upload
+        scores_dir: Directory containing score files
+        repo_id: Repository ID to upload to
+        api_client: Authenticated HF API client
+
+    Returns:
+        Dictionary with upload statistics
+    """
+    scores_dir = Path(scores_dir)
+    results = {"files": 0, "errors": 0, "skipped": 0}
+
+    if not api_client or not scored_submissions:
+        console.print("[yellow]Skipping uploads: No API client or no submissions to upload[/yellow]")
+        return results
+
+    console.print(f"[yellow]Uploading user score files for {len(scored_submissions)} submissions...[/yellow]")
+
+    for username, submission_id in scored_submissions:
+        try:
+            upload_stats = upload_user_files(username=username, submission_id=submission_id, base_dir=scores_dir, repo_id=repo_id)
+
+            # Update results
+            for key in ["uploaded", "skipped", "error"]:
+                if key in upload_stats:
+                    results_key = "files" if key == "uploaded" else key if key == "skipped" else "errors"
+                    results[results_key] += upload_stats[key]
+
+        except Exception as e:
+            console.print(f"[red]Error uploading files for {username}/{submission_id}: {e}[/red]")
+            results["errors"] += 1
+
+    # Summary
+    console.print(
+        f"[green]Upload results: {results['files']} files uploaded, {results['skipped']} skipped, {results['errors']} errors[/green]"
+    )
+
+    return results
+
+
 @app.command()
-def run_scoring(
+def score(
     model_dir: Annotated[Optional[Path], typer.Option(help="Directory containing the model files (deprecated, use model_dirs)")] = None,
     model_dirs: Annotated[Optional[List[Path]], typer.Option(help="List of directories containing the model files to use as judges")] = None,
     submissions_dir: Annotated[Optional[Path], typer.Option(help="Directory containing submissions")] = None,
@@ -1870,7 +2516,10 @@ def run_scoring(
     draft_cache_size: Annotated[Optional[Path], typer.Option(help="Cache size for draft model")] = None,
     config: Annotated[Optional[Path], typer.Option(callback=conf_callback, is_eager=True, help="Relative path to YAML config file for setting options. Passing CLI options will supersede config options.", case_sensitive=False)] = None,
 ):  # fmt: skip
-    """Run the scoring process, downloading new submissions and evaluating them.
+    """Run the scoring process using a refactored approach with better separation of concerns.
+
+    This is a refactored version of the original run_scoring function, split into
+    smaller, more focused functions for improved maintainability.
 
     Parameters:
         model_dir: Directory containing model files (deprecated, use model_dirs)
@@ -1893,367 +2542,154 @@ def run_scoring(
         draft_cache_size: Cache size for draft model
         config: Path to configuration file for setting options
     """
-    # Handle test mode
-    use_test_mode = not mode  # False = test, True = submit
-    use_test_sub = sub_test if sub_test is not None else use_test_mode
-    use_test_score = score_test if score_test is not None else use_test_mode
-
-    # Print test/submission mode status
-    if mode:
-        console.print("[bold green]Running in production mode[/bold green]")
-    else:
-        console.print("[bold yellow]Running in test mode[/bold yellow]")
-
-    # Set up API for upload if needed
-    if upload:
-        try:
-            _, api = get_hf_user()
-            console.print("[green]Successfully authenticated with Hugging Face[/green]")
-        except Exception as e:
-            console.print(f"[red]Error authenticating with Hugging Face: {e}[/red]")
-            console.print("[red]Continuing without upload capability[/red]")
-            upload = False
-
-    # Set up input and output directories
-    submission_dir = submissions_dir or "downloaded_submissions"
-    scores_dir_path = scores_dir or "submissions"
-
-    # Handle backward compatibility for model_dir vs model_dirs
-    if model_dirs is None:
-        if model_dir is None:
-            console.print("[red]Error: At least one model directory must be provided via --model-dir or --model-dirs[/red]")
-            return
-        model_dirs = [model_dir]
-    elif model_dir is not None:
-        # Both were provided, prioritize model_dirs but warn
-        console.print("[yellow]Warning: Both --model-dir and --model-dirs provided. Using --model-dirs and ignoring --model-dir.[/yellow]")
-
-    # Extract model names (use directory basename)
-    model_names = [Path(d).name for d in model_dirs]
-    console.print(f"[blue]Using {len(model_names)} judging models: {', '.join(model_names)}[/blue]")
-
-    # Get submissions (download new ones if needed)
-    submissions_repo_id = (
-        "cluster-of-stars/TinyStoriesHackathon_Submissions_Test" if use_test_sub else "cluster-of-stars/TinyStoriesHackathon_Submissions"
-    )
-    output_repo_id = (
-        "cluster-of-stars/TinyStoriesHackathon_Scores_Test" if use_test_score else "cluster-of-stars/TinyStoriesHackathon_Scores"
-    )
-
-    # Download new submissions from the appropriate repository (test or prod)
-    console.print(f"[yellow]Downloading new submissions from {submissions_repo_id}...[/yellow]")
-    new_submissions = download_new_submissions(dataset_id=submissions_repo_id, output_dir=submission_dir, is_test_mode=use_test_sub)
-    if new_submissions:
-        console.print(f"[green]Downloaded {len(new_submissions)} new submissions[/green]")
-    else:
-        console.print("[yellow]No new submissions to download[/yellow]")
-
-    # Download existing scores to avoid duplication
-    if upload:
-        try:
-            console.print(f"[yellow]Downloading existing scores from {output_repo_id}...[/yellow]")
-            download_existing_scores(repo_id=output_repo_id, base_dir=scores_dir_path, is_test_mode=use_test_score)
-        except Exception as e:
-            console.print(f"[yellow]Could not authenticate to sync with repository: {e}[/yellow]")
-
-    # Determine which submissions need scoring for each model
-    unscored_files_by_model = {model_name: [] for model_name in model_names}
-    Path(submission_dir).mkdir(exist_ok=True, parents=True)
-    Path(scores_dir_path).mkdir(exist_ok=True, parents=True)
-
-    # Use a simple message instead of an indeterminate progress bar
-    console.print("[yellow]Scanning for unscored submissions...[/yellow]")
-
-    # Get list of all CSV files
-    for user_dir in Path(submission_dir).glob("*"):
-        if not user_dir.is_dir():
-            continue
-
-        for csv_file in user_dir.glob("*.csv"):
-            # Skip summary files
-            if csv_file.name == "submission_summary.csv" or csv_file.name == "score_history.csv":
-                continue
-
-            username = user_dir.name
-            submission_id = csv_file.stem
-
-            # Check which models need to score this submission
-            for model_name in model_names:
-                # Check if this model has already scored this submission
-                if not is_submission_scored(username, submission_id, model_name, base_dir=scores_dir_path):
-                    unscored_files_by_model[model_name].append(
-                        {
-                            "username": username,
-                            "submission_id": submission_id,
-                            "csv_path": csv_file,
-                        }
-                    )
-
-    console.print("[green]Completed scanning for unscored submissions[/green]")
-
-    # Print a summary of what needs to be scored
-    for model_name, unscored_files in unscored_files_by_model.items():
-        console.print(f"[green]Model {model_name}: Found {len(unscored_files)} submissions needing scoring[/green]")
-
-    # Check if there's anything to score
-    total_unscored = sum(len(files) for files in unscored_files_by_model.values())
-    if total_unscored == 0:
-        console.print("[yellow]No submissions to score. Exiting.[/yellow]")
-        return
-
-    # Track successfully scored submissions
-    successfully_scored_submissions = set()
-
-    # Process each model separately
-    for model_idx, model_name in enumerate(model_names):
-        model_dir = model_dirs[model_idx]
-        unscored_files = unscored_files_by_model[model_name]
-
-        if not unscored_files:
-            console.print(f"[yellow]No unscored submissions for model {model_name}. Skipping.[/yellow]")
-            continue
-
-        console.print(f"[yellow]Processing {len(unscored_files)} submissions with model {model_name}...[/yellow]")
-
-        if test_samples:
-            console.print(f"[yellow]Limiting to {test_samples} samples per submission for testing[/yellow]")
-
-        # Score the submissions
-        console.print(f"[yellow]Loading model from {model_dir}...[/yellow]")
-
-        # Process submissions in chunks to avoid memory issues
-        chunk_size = 10  # Process 10 submissions at a time
-        for i in range(0, len(unscored_files), chunk_size):
-            chunk = unscored_files[i : i + min(chunk_size, len(unscored_files) - i)]
-            all_scores = {}
-
-            # Create the model instance
-            model_params = {
-                "model_dir": model_dir,
-                "max_new_tokens": max_new_tokens,
-                "temperature": temperature,
-                "top_p": top_p,
-                "cache_size": cache_size,
-                "prompt_file": prompt_file,
-                "reasoning_template": reasoning_template,
-                "log_prompts": log_prompts,
-                "draft_model_dir": draft_model_dir,
-                "draft_cache_size": draft_cache_size,
-            }
-
-            try:
-                # Score the submissions in this chunk
-                all_scores = llm_scoring.score_submissions(
-                    csv_paths=[str(item["csv_path"]) for item in chunk],
-                    model_params=model_params,
-                    test_samples=test_samples,
-                )
-            except Exception as e:
-                console.print(f"[red]Error scoring submissions: {e}[/red]")
-                continue
-
-            # Process the results
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                MofNCompleteColumn(),
-                TextColumn("• {task.elapsed}"),
-            ) as progress:
-                task = progress.add_task(f"Saving results for {model_name}", total=len(chunk))
-
-                for item in chunk:
-                    username = item["username"]
-                    submission_id = item["submission_id"]
-                    csv_path = item["csv_path"]
-
-                    progress.update(task, description=f"Processing {username}/{submission_id}")
-
-                    if username in all_scores and submission_id in all_scores[username]:
-                        # Read original submission to get prompts and completions
-                        try:
-                            df = pd.read_csv(csv_path)
-                            if "prompt" not in df.columns or "completion" not in df.columns:
-                                console.print(f"[red]Error: Missing required columns in {csv_path}. Skipping.[/red]")
-                                progress.update(task, advance=1)
-                                continue
-
-                            prompts = df["prompt"].tolist()
-                            completions = df["completion"].tolist()
-
-                            # Extract scores for this submission
-                            submission_scores = all_scores[username][submission_id]
-
-                            # Get this model's results
-                            current_model_name = list(submission_scores.keys())[0]  # We'll rename this to our model_name
-                            item_scores = submission_scores[current_model_name]["details"]
-
-                            # Validate item scores
-                            if not item_scores:
-                                console.print(
-                                    f"[red]Error: No valid scores for {username}/{submission_id} with model {model_name}. Skipping.[/red]"
-                                )
-                                progress.update(task, advance=1)
-                                continue
-
-                            # Create a dictionary of item_id to scores
-                            item_scores_dict = {entry["item_id"]: entry["scores"] for entry in item_scores}
-
-                            # Verify scores contain actual values
-                            if not any(scores for scores in item_scores_dict.values()):
-                                console.print(
-                                    f"[red]Error: Empty scores for {username}/{submission_id} with model {model_name}. Skipping.[/red]"
-                                )
-                                progress.update(task, advance=1)
-                                continue
-
-                            # Save model CSV with our defined model_name
-                            saved_path = save_model_csv(
-                                username=username,
-                                submission_id=submission_id,
-                                model_name=model_name,  # Use our defined model name
-                                prompts=prompts,
-                                completions=completions,
-                                item_scores=item_scores_dict,
-                                base_dir=scores_dir_path,
-                                overwrite=True,
-                            )
-
-                            # Verify the CSV was written with actual data
-                            if saved_path.exists():
-                                try:
-                                    saved_df = pd.read_csv(saved_path)
-                                    if not saved_df.empty and any(col.lower() in saved_df.columns for col in ScoreCategory):
-                                        # Add to successfully scored submissions
-                                        successfully_scored_submissions.add((username, submission_id))
-                                    else:
-                                        console.print(f"[red]Error: Saved CSV {saved_path} is empty or missing score columns. Skipping.[/red]")  # fmt: skip
-                                except Exception as e:
-                                    console.print(f"[red]Error validating saved CSV {saved_path}: {e}. Skipping.[/red]")
-                            else:
-                                console.print(f"[red]Error: Failed to save CSV for {username}/{submission_id} with model {model_name}. Skipping.[/red]")  # fmt: skip
-
-                        except Exception as e:
-                            console.print(f"[red]Error processing {username}/{submission_id} with model {model_name}: {e}. Skipping.[/red]")
-
-                    progress.update(task, advance=1)
-
-        console.print(f"[green]Completed scoring with model {model_name}[/green]")
-
-    # Check if we have any successfully scored submissions
-    if not successfully_scored_submissions:
-        console.print("[red]No submissions were successfully scored. Skipping summary generation and uploads.[/red]")
-        return
-
-    console.print(f"[green]Successfully scored {len(successfully_scored_submissions)} submissions[/green]")
-
-    # After all models have scored, generate/update submission summaries
-    console.print("[yellow]Generating submission summaries...[/yellow]")
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TextColumn("• {task.elapsed}"),
-    ) as progress:
-        task = progress.add_task("Generating summaries", total=len(successfully_scored_submissions))
-
-        for username, submission_id in successfully_scored_submissions:
-            progress.update(task, description=f"Processing {username}/{submission_id}")
-            try:
-                # Generate summary
-                summary_path = save_submission_summary(
-                    username=username,
-                    submission_id=submission_id,
-                    base_dir=scores_dir_path,
-                    overwrite=True,
-                    repo_id=output_repo_id if upload else None,
-                )
-
-                # Update user score history if summary was created and contains valid data
-                if summary_path and summary_path.exists():
-                    try:
-                        summary_df = pd.read_csv(summary_path)
-                        if not summary_df.empty and any(col.lower() in summary_df.columns for col in ScoreCategory):
-                            update_user_score_history(
-                                username=username,
-                                submission_id=submission_id,
-                                summary_df=summary_df,
-                                base_dir=scores_dir_path,
-                                overwrite=True,
-                            )
-                        else:
-                            console.print(
-                                f"[red]Error: Summary file {summary_path} is empty or missing score columns. Skipping history update.[/red]"
-                            )
-                    except Exception as e:
-                        console.print(f"[red]Error processing summary for {username}/{submission_id}: {e}. Skipping history update.[/red]")
-            except Exception as e:
-                console.print(f"[red]Error generating summary for {username}/{submission_id}: {e}. Skipping.[/red]")
-
-            progress.update(task, advance=1)
-
-    # Generate leaderboards
-    console.print("[yellow]Generating leaderboards...[/yellow]")
     try:
-        # Download existing score files right before generating leaderboards to avoid race conditions
-        if upload:
-            console.print(f"[yellow]Downloading existing score files from {output_repo_id}...[/yellow]")
-            download_existing_scores(repo_id=output_repo_id, base_dir=scores_dir_path, is_test_mode=use_test_score)
+        # Step 1: Set up environment
+        env_config, model_dirs, model_names = setup_environment(
+            mode=mode, sub_test=sub_test, score_test=score_test, model_dir=model_dir, model_dirs=model_dirs
+        )
 
-        leaderboard_df = generate_and_save_all_leaderboards(base_dir=scores_dir_path)
-        if not leaderboard_df.empty:
-            console.print("[green]Leaderboards generated successfully[/green]")
-            if upload:
-                console.print("[yellow]Uploading leaderboards...[/yellow]")
-                upload_leaderboards(repo_id=output_repo_id)
-        else:
-            console.print("[red]Error: Generated leaderboards are empty. Skipping upload.[/red]")
+        # Step 2: Set up API client for uploads
+        api_client = setup_api_client(upload=upload)
+
+        # Set final upload flag based on API client availability
+        can_upload = upload and api_client is not None
+
+        # Set up input and output directories
+        submission_dir = submissions_dir or env_config.submission_dir
+        scores_dir_path = scores_dir or env_config.scores_dir
+
+        # Step 3: Download submissions and scores
+        download_result = download_submissions_and_scores(
+            env_config=env_config, submission_dir=submission_dir, scores_dir=scores_dir_path, api_client=api_client if can_upload else None
+        )
+
+        # Step 4: Find unscored submissions
+        unscored_files_by_model = find_unscored_submissions(
+            submission_dir=submission_dir, scores_dir=scores_dir_path, model_names=model_names
+        )
+
+        # Check if there's anything to score
+        total_unscored = sum(len(files) for files in unscored_files_by_model.values())
+        if total_unscored == 0:
+            console.print("[yellow]No submissions to score. Exiting.[/yellow]")
+            return
+
+        # Step 5: Score submissions
+        successfully_scored_submissions = score_submissions(
+            unscored_files_by_model=unscored_files_by_model,
+            model_dirs=model_dirs,
+            model_names=model_names,
+            scores_dir=scores_dir_path,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            cache_size=cache_size,
+            prompt_file=prompt_file,
+            reasoning_template=reasoning_template,
+            log_prompts=log_prompts,
+            test_samples=test_samples,
+            draft_model_dir=draft_model_dir,
+            draft_cache_size=draft_cache_size,
+        )
+
+        # Stop here if no submissions were successfully scored
+        if not successfully_scored_submissions:
+            console.print("[red]No submissions were successfully scored. Skipping summary generation and uploads.[/red]")
+            return
+
+        # Step 6: Generate summaries and update history for scored submissions
+        summary_results = generate_summaries_and_history(
+            scored_submissions=successfully_scored_submissions,
+            scores_dir=scores_dir_path,
+            overwrite=True,
+            repo_id=env_config.scores_repo_id if can_upload else None,
+        )
+
+        # Step 7: Generate and optionally upload leaderboards
+        leaderboard_results = generate_and_upload_leaderboards(
+            scores_dir=scores_dir_path,
+            leaderboard_dir="leaderboards",
+            upload=can_upload,
+            api_client=api_client,
+            repo_id=env_config.scores_repo_id,
+            update_readme=can_upload,
+            force_readme_update=False,
+        )
+
+        # Step 8: Upload user score files if requested
+        upload_stats = {}
+        if can_upload and successfully_scored_submissions:
+            upload_stats = upload_results(
+                scored_submissions=successfully_scored_submissions,
+                scores_dir=scores_dir_path,
+                repo_id=env_config.scores_repo_id,
+                api_client=api_client,
+            )
+
+        # Print summary of results
+        console.print("\n[bold blue]===== Scoring Process Complete =====[/bold blue]")
+        console.print(f"[blue]Environment: {'Production' if mode else 'Test'}[/blue]")
+        console.print(f"[blue]Submissions Repository: {env_config.submissions_repo_id}[/blue]")
+        console.print(f"[blue]Scores Repository: {env_config.scores_repo_id}[/blue]")
+        console.print(f"[blue]Models used: {', '.join(model_names)}[/blue]")
+        console.print(f"[blue]Total submissions scored: {len(successfully_scored_submissions)}[/blue]")
+        console.print(f"[blue]Generated {len(summary_results['summary_files'])} summary files[/blue]")
+        console.print(f"[blue]Updated {len(summary_results['history_files'])} history files[/blue]")
+
+        if leaderboard_results.get("leaderboard") is not None:
+            weight_class_count = len(leaderboard_results.get("weight_class_leaderboards", {}))
+            console.print(f"[blue]Generated global leaderboard and {weight_class_count} weight class leaderboards[/blue]")
+
+            if can_upload:
+                upload_stats_lb = leaderboard_results.get("upload_stats", {})
+                console.print(f"[blue]Uploaded {upload_stats_lb.get('files', 0)} leaderboard files[/blue]")
+                if leaderboard_results.get("readme_updated", False):
+                    console.print("[blue]Updated repository README with latest leaderboards[/blue]")
+
+        if can_upload and upload_stats:
+            console.print(f"[blue]Uploaded {upload_stats.get('files', 0)} user score files[/blue]")
+
+        console.print("[green]Scoring process completed successfully[/green]")
+
     except Exception as e:
-        console.print(f"[red]Error generating leaderboards: {e}[/red]")
+        console.print(f"[red]Error in refactored scoring process: {e}[/red]")
+        import traceback
 
-    # Upload results to Hugging Face if requested
-    if upload:
-        console.print(f"[yellow]Uploading results to {output_repo_id}...[/yellow]")
-        try:
-            results = upload_all_user_files(base_dir=scores_dir_path, repo_id=output_repo_id)
-            console.print(f"[green]Upload complete: {results.get('uploaded', 0)} files uploaded, {results.get('skipped', 0)} files skipped, {results.get('error', 0)} errors[/green]")  # fmt: skip
-        except Exception as e:
-            console.print(f"[red]Error uploading results: {e}[/red]")
-
-        # Update repository README with leaderboard section
-        console.print("[yellow]Updating repository README...[/yellow]")
-        try:
-            if update_repository_readme(repo_id=output_repo_id):
-                console.print("[green]Repository README updated successfully[/green]")
-            else:
-                console.print("[yellow]Repository README not updated (not needed or not possible)[/yellow]")
-        except Exception as e:
-            console.print(f"[red]Error updating repository README: {e}[/red]")
-
-    console.print("[green]Scoring process completed[/green]")
+        console.print(traceback.format_exc())
 
 
 @app.command()
 def cleanup(
-    dir: Annotated[
-        Optional[Path],
-        typer.Option(help="Directory containing the directories that need to be deleted [state,downloaded_submissions,logs,etc]"),
-    ] = Path("."),
-):
+    dir: Annotated[Optional[Path],typer.Option(help="Directory containing the directories that need to be deleted [state,downloaded_submissions,logs,etc]")] = Path("."),
+    force: Annotated[bool, typer.Option("--force", "-f", help="Force deletion without countdown.")] = False,
+):  # fmt: skip
     "Remove directories used for testing and evaluation"
-    dirs_to_remove = ["state", "downloaded_submissions_test", "leaderboards", "downloaded_submissions", "logs", "scores_test"]
+    dirs_to_remove = ["state", "downloaded_submissions_test", "leaderboards", "downloaded_submissions", "logs", "scores_test", "scores"]
 
+    if not force:
+        console.print("[bold yellow]WARNING:[/bold yellow] This will permanently delete the following directories:")
+        for dir_name in dirs_to_remove:
+            if (Path(dir) / dir_name).exists():
+                console.print(f"  - {Path(dir) / dir_name}")
+        console.print("[yellow]Starting deletion in 5 seconds. Press Ctrl+C to cancel.[/yellow]")
+        for i in range(5, 0, -1):
+            console.print(f"[yellow]Deleting in {i}...[/yellow]", end="\r")
+            time.sleep(1)
+
+    console.print(f"[blue]Cleaning up directories in: {dir.resolve()}[/blue]")
     for dir_name in dirs_to_remove:
-        path = Path(dir_name)
+        path = Path(dir) / dir_name  # Construct path relative to the optional 'dir' argument
         if path.exists():
             if path.is_dir():
-                shutil.rmtree(path)
-                console.print(f"[green]Removed {dir_name}[/green]")
+                try:
+                    shutil.rmtree(path)
+                    console.print(f"[green]Removed {path}[/green]")
+                except OSError as e:
+                    console.print(f"[red]Error removing directory {path}: {e}[/red]")
             else:
-                console.print(f"[red]Not a directory - {dir_name}[/red]")
+                console.print(f"[red]Not a directory - {path}[/red]")
         else:
-            console.print(f"[yellow]Skipping {dir_name} - not found[/yellow]")
+            console.print(f"[yellow]Skipping {path} - not found[/yellow]")
 
 
 if __name__ == "__main__":
