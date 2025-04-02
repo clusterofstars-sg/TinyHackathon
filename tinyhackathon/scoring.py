@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import re
@@ -100,19 +100,19 @@ class UploadTracker:
             return True
 
         # Get file modification time as ISO timestamp
-        mtime = datetime.datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
+        mtime = datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
         return mtime > last_upload_time
 
     def mark_file_uploaded(self, file_path: Path):
         """Mark a file as uploaded with current timestamp."""
         file_path_str = str(file_path)
-        mtime = datetime.datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
+        mtime = datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
         self.state["last_upload"][file_path_str] = mtime
         self.save_state()
 
     def mark_readme_updated(self):
         """Mark the README as updated with current timestamp."""
-        self.state["last_readme_update"] = datetime.datetime.now().isoformat()
+        self.state["last_readme_update"] = datetime.now().isoformat()
         self.save_state()
 
     def should_update_readme(self, min_interval_hours=12) -> bool:
@@ -121,8 +121,8 @@ class UploadTracker:
         if last_update is None:
             return True
 
-        last_update_time = datetime.datetime.fromisoformat(last_update)
-        hours_since_update = (datetime.datetime.now() - last_update_time).total_seconds() / 3600
+        last_update_time = datetime.fromisoformat(last_update)
+        hours_since_update = (datetime.now() - last_update_time).total_seconds() / 3600
         return hours_since_update >= min_interval_hours
 
 
@@ -189,7 +189,7 @@ class ScoringTracker:
                             # Update the disk state with combined models
                             disk_state["scored_submissions"][username][submission_id]["models"] = combined_models
                             # Update timestamp to most recent
-                            disk_state["scored_submissions"][username][submission_id]["timestamp"] = datetime.datetime.now().isoformat()
+                            disk_state["scored_submissions"][username][submission_id]["timestamp"] = datetime.now().isoformat()
 
                 # Use the merged state for writing
                 self.state = disk_state
@@ -565,15 +565,15 @@ def extract_submission_datetime(submission_id: str) -> str:
         try:
             ts_str = timestamp_match.group(1)
             # Parse timestamp in format YYYYmmdd_HHMMSS
-            ts_datetime = datetime.datetime.strptime(ts_str, "%Y%m%d_%H%M%S")
+            ts_datetime = datetime.strptime(ts_str, "%Y%m%d_%H%M%S")
             # Format as YYYY-MM-DD HH:MM
             return ts_datetime.strftime("%Y-%m-%d %H:%M")
         except ValueError:
             # If parsing fails, return current time in simplified format
-            return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            return datetime.now().strftime("%Y-%m-%d %H:%M")
     else:
         # If no timestamp found, return current time in simplified format
-        return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
 def get_authenticated_api() -> HfApi:
@@ -1695,8 +1695,8 @@ def generate_readme_leaderboard_section(leaderboard_dir: str = "leaderboards") -
 
     # Generate timestamp
     # Use AOE (Anywhere on Earth, UTC-12) timezone for the leaderboard timestamp
-    aoe_timezone = datetime.datetime.timezone(datetime.timedelta(hours=-12))
-    timestamp = datetime.datetime.now(aoe_timezone).strftime("%Y-%m-%d %H:%M:%S AOE")
+    aoe_timezone = timezone(timedelta(hours=-12))
+    timestamp = datetime.now().replace(tzinfo=timezone.utc).astimezone(aoe_timezone).strftime("%Y-%m-%d %H:%M:%S AOE")
 
     # Define column order with overall first, then other categories
     score_categories = [ScoreCategory.OVERALL.lower()]

@@ -166,7 +166,8 @@ def upload_submission(
             )
 
     # Generate timestamp for the submission
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now()
+    timestamp = timestamp.replace(tzinfo=timezone.utc).astimezone(aoe_timezone).strftime("%Y%m%d_%H%M%S")
 
     # Use temporary directory instead of local directory
     with tempfile.TemporaryDirectory() as temp_dir:
