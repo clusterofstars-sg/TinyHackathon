@@ -1917,6 +1917,112 @@ def display_leaderboard_preview(leaderboard_df: pd.DataFrame):
     console.print(table)
 
 
+def download_existing_scores(
+    repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Scores",
+    base_dir: str = "submissions",
+    is_test_mode: bool = False,
+) -> Dict[str, int]:
+    """Download existing score CSV files from repository for already scored submissions.
+
+    Args:
+        repo_id: Hugging Face repository ID
+        base_dir: Base directory to save score files
+        is_test_mode: Whether to use test mode
+
+    Returns:
+        Dictionary with counts of downloaded files
+    """
+    # Get authenticated API
+    try:
+        api = get_authenticated_api()
+    except Exception as e:
+        console.print(f"[red]Authentication error: {e}[/red]")
+        return {"downloaded": 0, "skipped": 0, "error": 1}
+
+    # Initialize scoring tracker to get the state
+    scoring_tracker = ScoringTracker(is_test_mode=is_test_mode)
+    # Sync with repository to ensure we have the latest state
+    scoring_tracker.sync_with_repository(repo_id, api)
+
+    # Get the list of all files in the repository
+    try:
+        files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
+    except Exception as e:
+        console.print(f"[red]Error listing repository files: {e}[/red]")
+        return {"downloaded": 0, "skipped": 0, "error": 1}
+
+    results = {"downloaded": 0, "skipped": 0, "error": 0}
+
+    # Process all submissions in the state
+    if "scored_submissions" in scoring_tracker.state:
+        for username, user_data in scoring_tracker.state["scored_submissions"].items():
+            for submission_id, submission_data in user_data.items():
+                # Create local submission directory
+                submission_dir = Path(base_dir) / username / submission_id
+                submission_dir.mkdir(parents=True, exist_ok=True)
+
+                # Download summary file if it exists
+                summary_path = f"submissions/{username}/{submission_id}/submission_summary.csv"
+                if summary_path in files:
+                    local_summary_path = submission_dir / "submission_summary.csv"
+                    if not local_summary_path.exists():
+                        try:
+                            downloaded_path = api.hf_hub_download(
+                                repo_id=repo_id, repo_type="dataset", filename=summary_path, local_dir=Path(base_dir)
+                            )
+                            results["downloaded"] += 1
+                            console.print(f"[green]Downloaded {summary_path}[/green]")
+                        except Exception as e:
+                            console.print(f"[red]Error downloading {summary_path}: {e}[/red]")
+                            results["error"] += 1
+                    else:
+                        results["skipped"] += 1
+
+                # Download model-specific CSV files
+                models = submission_data.get("models", [])
+                for model_name in models:
+                    model_path = f"submissions/{username}/{submission_id}/{model_name}.csv"
+                    if model_path in files:
+                        local_model_path = submission_dir / f"{model_name}.csv"
+                        if not local_model_path.exists():
+                            try:
+                                downloaded_path = api.hf_hub_download(
+                                    repo_id=repo_id, repo_type="dataset", filename=model_path, local_dir=Path(base_dir)
+                                )
+                                results["downloaded"] += 1
+                                console.print(f"[green]Downloaded {model_path}[/green]")
+                            except Exception as e:
+                                console.print(f"[red]Error downloading {model_path}: {e}[/red]")
+                                results["error"] += 1
+                        else:
+                            results["skipped"] += 1
+
+    # Download user history files
+    for username in scoring_tracker.state.get("scored_submissions", {}):
+        history_path = f"submissions/{username}/score_history.csv"
+        if history_path in files:
+            local_user_dir = Path(base_dir) / username
+            local_user_dir.mkdir(parents=True, exist_ok=True)
+            local_history_path = local_user_dir / "score_history.csv"
+            if not local_history_path.exists():
+                try:
+                    downloaded_path = api.hf_hub_download(
+                        repo_id=repo_id, repo_type="dataset", filename=history_path, local_dir=Path(base_dir)
+                    )
+                    results["downloaded"] += 1
+                    console.print(f"[green]Downloaded {history_path}[/green]")
+                except Exception as e:
+                    console.print(f"[red]Error downloading {history_path}: {e}[/red]")
+                    results["error"] += 1
+            else:
+                results["skipped"] += 1
+
+    console.print(
+        f"[green]Downloaded {results['downloaded']} score files, skipped {results['skipped']} existing files, {results['error']} errors[/green]"
+    )
+    return results
+
+
 # Add Typer CLI
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 
@@ -2299,6 +2405,11 @@ def run_scoring(
     # Generate leaderboards
     console.print("[yellow]Generating leaderboards...[/yellow]")
     try:
+        # Download existing score files right before generating leaderboards to avoid race conditions
+        if upload:
+            console.print(f"[yellow]Downloading existing score files from {output_repo_id}...[/yellow]")
+            download_existing_scores(repo_id=output_repo_id, base_dir=scores_dir_path, is_test_mode=use_test_score)
+
         leaderboard_files = generate_and_save_all_leaderboards(base_dir=scores_dir_path)
         if not leaderboard_files.empty:
             console.print("[green]Leaderboards generated successfully[/green]")
