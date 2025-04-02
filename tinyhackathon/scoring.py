@@ -1,4 +1,3 @@
-import csv
 import datetime
 import json
 import os
@@ -7,21 +6,36 @@ import tempfile
 import time
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Annotated, Any, Dict, List, Optional, Tuple, Union
 
 # Import from llm_scoring
 import llm_scoring
 import pandas as pd
 import typer
+import yaml
 from huggingface_hub import HfApi
 from rich.console import Console
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 # Import from submission.py for authentication
 from submission import get_hf_user
 
 console = Console()
+
+
+# from maxb2: https://github.com/tiangolo/typer/issues/86#issuecomment-996374166
+def conf_callback(ctx: typer.Context, param: typer.CallbackParam, config: Optional[str] = None):
+    if config is not None:
+        typer.echo(f"Loading config file: {config}\n")
+        try:
+            with open(config, "r") as f:  # Load config file
+                conf = yaml.safe_load(f)
+            ctx.default_map = ctx.default_map or {}  # Initialize the default map
+            ctx.default_map.update(conf)  # Merge the config dict into default_map
+        except Exception as ex:
+            raise typer.BadParameter(str(ex))
+    return config
 
 
 class ScoreCategory(str, Enum):
@@ -1822,6 +1836,18 @@ def update_repository_readme(
             # Append to README
             new_readme = readme_content.rstrip() + "\n\n" + leaderboard_section
 
+        # Add YAML metadata at the top if it doesn't exist already
+        yaml_pattern = r"---\nlanguage:.*?\n---\n"
+        if not re.search(yaml_pattern, new_readme, re.DOTALL):
+            # Create YAML metadata block
+            yaml_metadata = """---
+language: en
+---
+
+"""
+            # Prepend YAML metadata to README content
+            new_readme = yaml_metadata + new_readme
+
         # Write updated README
         readme_path.write_text(new_readme)
 
@@ -1829,7 +1855,7 @@ def update_repository_readme(
         try:
             api.upload_file(path_or_fileobj=str(readme_path), path_in_repo="README.md", repo_id=repo_id, repo_type="dataset")
             tracker.mark_readme_updated()
-            console.print(f"[green]Updated README.md with leaderboard information[/green]")
+            console.print(f"[green]Updated README.md with leaderboard information and YAML metadata[/green]")
             return True
         except Exception as e:
             console.print(f"[red]Error uploading README: {e}[/red]")
@@ -1914,6 +1940,7 @@ def run_scoring(
     test_samples: Annotated[Optional[int], typer.Option(help="Number of test samples to score")] = None,
     draft_model_dir: Annotated[Optional[Path], typer.Option(help="Directory for draft model (speculative decoding)")] = None,
     draft_cache_size: Annotated[Optional[Path], typer.Option(help="Cache size for draft model")] = None,
+    config: Annotated[Optional[Path], typer.Option(callback=conf_callback, is_eager=True, help="Relative path to YAML config file for setting options. Passing CLI options will supersede config options.", case_sensitive=False)] = None,
 ):  # fmt: skip
     """Run the scoring process, downloading new submissions and evaluating them.
 
