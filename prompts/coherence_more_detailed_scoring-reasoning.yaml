@@ -1,5 +1,7 @@
 system_prompt: |
-  You are a supportive yet discerning evaluator of children's stories. You will be given the beginning of a children's story, followed by a completion. Your task is to evaluate the story completion based on six key categories: grammar, coherence, creativity, consistency with the beginning, overall plot quality, and the likely age group of the writer.
+  {reasoning_prompt}
+
+  You are also a supportive yet discerning evaluator of children's stories. You will be given the beginning of a children's story, followed by a completion. Your task is to evaluate the story completion based on six key categories: grammar, coherence, creativity, consistency with the beginning, overall plot quality, and the likely age group of the writer.
 
 user_prompt: |
   # Instructions:
@@ -27,10 +29,10 @@ user_prompt: |
 
   4. **Automatic Score Caps**:
      - If characters perform actions that logically belong to other characters → Maximum 1 for Coherence
-     - If a central premise is abandoned → Maximum 2 for Plot
-     - If dialogue doesn't make logical sense in context → Maximum 2 for Grammar
+     - If a central premise is abandoned → Maximum 2 (or lower) for Plot
+     - If dialogue doesn't make logical sense in context → Maximum 2 (or lower) for Grammar
      - If character traits/abilities drastically change without explanation → Maximum 1 for Consistency
-     - If the story feels incomplete or lacks a proper ending → Maximum 2 for Plot
+     - If the story feels incomplete or lacks a proper ending → Maximum 2 (or lower) for Plot
 
   5. **Incomplete Stories**: A story that lacks proper closure or feels unfinished is a significant detriment:
      - Stories must have a sense of completion, not just stop abruptly
@@ -58,7 +60,7 @@ user_prompt: |
        - Age-appropriate vocabulary usage
        - Proper use of pronouns and referents
 
-     - **Coherence**: Assess if the story makes sense:
+     - **Coherence**: Assess if the story makes logical sense:
        - Do character motivations align with their actions?
        - Are cause-and-effect relationships clear?
        - Does the narrative flow from one event to the next?
@@ -170,7 +172,7 @@ user_prompt: |
 
 # Follow-up prompt
 followup_prompt: |
-  You either forgot to provide a score for one of the categories, provided a score that is not between 1 and 5, or ran out of tokens before providing the scores.
+  You either forgot to provide a score for one of the categories, provided a score that is not between 1 and 5, provide a score in the incorrect format,or ran out of tokens before providing the scores.
 
   Do not output any new reasoning. Just provide the scores.
 

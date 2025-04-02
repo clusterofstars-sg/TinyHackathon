@@ -36,7 +36,11 @@ def load_submissions(submissions_dir: Union[str, Path]) -> List[Path]:
 
 
 def create_evaluation_prompt(
-    story_start: str, completion: str, prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml", previous_response: Optional[str] = None
+    story_start: str,
+    completion: str,
+    prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml",
+    previous_response: Optional[str] = None,
+    reasoning_template: Optional[str] = None,
 ):
     "Create a structured prompt for evaluating story completions from a YAML file, with optional follow-up"
     prompt_file = Path(prompt_file) if not isinstance(prompt_file, Path) else prompt_file
@@ -56,6 +60,27 @@ def create_evaluation_prompt(
     system_prompt = prompts.get("system_prompt", "")
     user_prompt = prompts.get("user_prompt", "")
     followup_prompt = prompts.get("followup_prompt", "")
+
+    # If reasoning template is provided and the system prompt has the placeholder
+    if reasoning_template and "{reasoning_prompt}" in system_prompt:
+        try:
+            # Use specified reasoning template
+            reasoning_file = Path(reasoning_template)
+
+            if not reasoning_file.exists():
+                console.print(f"[red]Reasoning template file {reasoning_file} not found[/red]")
+                raise ValueError(f"Reasoning template file {reasoning_file} not found")
+
+            with open(reasoning_file, "r") as f:
+                reasoning_template_data = yaml.safe_load(f)
+
+            reasoning_prompt = reasoning_template_data.get("reasoning_prompt", "")
+
+            # Format the system prompt with the reasoning prompt
+            system_prompt = system_prompt.format(reasoning_prompt=reasoning_prompt)
+        except Exception as e:
+            console.print(f"[red]Error applying reasoning template: {str(e)}[/red]")
+            # Continue with the original system prompt if there's an error
 
     # Format the user prompt with provided values
     user_prompt = user_prompt.format(story_start=story_start, completion=completion)
@@ -81,15 +106,17 @@ def create_evaluation_prompt(
 
 def load_model(
     model_dir: str,
-    batch_size: int = 128,
     cache_size: int = 1024 * 50,
+    draft_model_dir: Optional[str] = None,
+    draft_cache_size: Optional[int] = None,
 ) -> Tuple[ExLlamaV2DynamicGenerator, str]:
     """Load an ExLlama2 model and return the generator and model architecture.
 
     Args:
         model_dir: Directory containing the model files
-        batch_size: Maximum batch size for inference
         cache_size: Cache size in tokens
+        draft_model_dir: Directory containing the draft model files
+        draft_cache_size: Draft cache size in tokens
 
     Returns:
         Tuple of (generator, model_architecture)
@@ -105,7 +132,24 @@ def load_model(
     hf_tokenizer = transformers.AutoTokenizer.from_pretrained(model_dir)
     tokenizer.apply_chat_template = hf_tokenizer.apply_chat_template
 
-    generator = ExLlamaV2DynamicGenerator(model=model, cache=cache, tokenizer=tokenizer, max_batch_size=batch_size)
+    if draft_model_dir is not None:
+        console.print(f"[yellow]Loading draft model from {draft_model_dir}...[/yellow]")
+        draft_config = ExLlamaV2Config(draft_model_dir)
+        draft_model = ExLlamaV2(draft_config)
+        draft_cache = ExLlamaV2Cache(draft_model, max_seq_len=draft_cache_size, lazy=True)
+        draft_model.load_autosplit(draft_cache)
+    else:
+        draft_model = None
+        draft_cache = None
+
+    generator = ExLlamaV2DynamicGenerator(
+        model=model,
+        cache=cache,
+        tokenizer=tokenizer,
+        max_batch_size=None,
+        draft_model=draft_model,
+        draft_cache=draft_cache,
+    )
     generator.warmup()
 
     # Return the generator and model architecture
@@ -123,6 +167,7 @@ def process_submission(
     log_prompts: bool = False,
     prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml",
     parent_progress: Optional["Progress"] = None,
+    reasoning_template: Optional[str] = None,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """Process a single submission file and evaluate its completions.
 
@@ -137,6 +182,7 @@ def process_submission(
         log_prompts: Whether to log prompts and responses
         prompt_file: Path to YAML file with evaluation prompts
         parent_progress: Optional parent Progress instance to use instead of creating a new one
+        reasoning_template: Optional reasoning template to apply
 
     Returns:
         Dictionary containing scores data
@@ -186,6 +232,7 @@ def process_submission(
             log_file=log_file,
             prompt_file=prompt_file,
             parent_progress=parent_progress,
+            reasoning_template=reasoning_template,
         )
 
         # Compute average time per item for reporting
@@ -347,6 +394,7 @@ def eval_completions(
     log_file: Optional[Path] = None,
     prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml",
     parent_progress: Optional["Progress"] = None,
+    reasoning_template: Optional[str] = None,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """Evaluate each completion in a submission using batch processing with re-prompting for missing scores.
 
@@ -365,6 +413,7 @@ def eval_completions(
         log_file: Optional path to save logs
         prompt_file: Path to YAML file with evaluation prompts
         parent_progress: Optional parent Progress instance to use instead of creating a new one
+        reasoning_template: Optional reasoning template to apply
 
     Returns:
         Updated scores dictionary
@@ -385,7 +434,9 @@ def eval_completions(
         followup_prompts_log = {}
 
         for i, (beginning, completion) in enumerate(zip(prompts, completions)):
-            raw_prompt = create_evaluation_prompt(story_start=beginning, completion=completion, prompt_file=prompt_file)
+            raw_prompt = create_evaluation_prompt(
+                story_start=beginning, completion=completion, prompt_file=prompt_file, reasoning_template=reasoning_template
+            )
             templated_prompt = generator.tokenizer.apply_chat_template(raw_prompt, add_generation_prompt=True, tokenize=False)
 
             # Store prompt for logging
@@ -459,7 +510,11 @@ def eval_completions(
 
                 # Create follow-up prompt
                 raw_prompt = create_evaluation_prompt(
-                    story_start=beginning, completion=completion, prompt_file=prompt_file, previous_response=previous_response
+                    story_start=beginning,
+                    completion=completion,
+                    prompt_file=prompt_file,
+                    previous_response=previous_response,
+                    reasoning_template=reasoning_template,
                 )
 
                 templated_prompt = generator.tokenizer.apply_chat_template(raw_prompt, add_generation_prompt=True, tokenize=False)
@@ -596,13 +651,15 @@ def score_submission(
     temperature: float = 0.1,
     top_p: float = 0.9,
     max_new_tokens: int = 20,
-    batch_size: int = 128,
     cache_size: int = 1024 * 60,
     log_prompts: bool = False,
     prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml",
     generator: Optional[ExLlamaV2DynamicGenerator] = None,
     model_arch: Optional[str] = None,
     sample: Optional[int] = None,
+    draft_model_dir: Optional[str] = None,
+    draft_cache_size: Optional[int] = None,
+    reasoning_template: Optional[str] = None,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """Score one or more submissions using the specified model.
 
@@ -612,25 +669,27 @@ def score_submission(
         temperature: Temperature for generation
         top_p: Top-p sampling value
         max_new_tokens: Maximum tokens to generate
-        batch_size: Batch size for inference
         cache_size: Cache size in tokens
         log_prompts: Whether to log prompts and responses
         prompt_file: Path to prompt file
         generator: Optional pre-loaded generator to reuse
         model_arch: Optional model architecture name if generator is provided
         sample: Optional number of samples to score per submission
+        draft_model_dir: Directory containing the draft model files
+        draft_cache_size: Draft cache size in tokens
+        reasoning_template: Optional reasoning template to apply
 
     Returns:
         Dictionary with scores for all processed submissions
     """
     # Only load the model if neither generator nor model_arch is provided
     if generator is None and model_arch is None:
-        generator, model_arch = load_model(model_dir, batch_size, cache_size)
+        generator, model_arch = load_model(model_dir, cache_size, draft_model_dir, draft_cache_size)
         console.print(f"[green]Loaded model {model_arch} successfully[/green]")
     # Handle case where one is provided but not the other
     elif generator is None:
         console.print(f"[yellow]Loading model (architecture {model_arch} specified but generator missing)...[/yellow]")
-        generator, _ = load_model(model_dir, batch_size, cache_size)
+        generator, _ = load_model(model_dir, cache_size, draft_model_dir, draft_cache_size)
         console.print("[green]Loaded model successfully[/green]")
     elif model_arch is None:
         console.print("[yellow]Warning: Using provided generator but model architecture name unknown[/yellow]")
@@ -679,6 +738,7 @@ def score_submission(
                     log_prompts=log_prompts,
                     prompt_file=prompt_file,
                     parent_progress=progress,  # Pass the progress object
+                    reasoning_template=reasoning_template,
                 )
 
                 # Merge with combined scores

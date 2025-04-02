@@ -1794,24 +1794,47 @@ app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pret
 
 @app.command()
 def run_scoring(
-    model_dir: Optional[str] = typer.Option(None, help="Directory containing the model files (deprecated, use model_dirs)"),
-    model_dirs: Optional[List[str]] = typer.Option(None, help="List of directories containing the model files to use as judges"),
+    model_dir: Optional[Path] = typer.Option(None, help="Directory containing the model files (deprecated, use model_dirs)"),
+    model_dirs: Optional[List[Path]] = typer.Option(None, help="List of directories containing the model files to use as judges"),
     submissions_dir: Optional[Path] = typer.Option(None, help="Directory containing submissions"),
     scores_dir: Optional[Path] = typer.Option(None, help="Directory to save scoring results"),
     max_new_tokens: int = typer.Option(1024, help="Maximum tokens to generate"),
     temperature: float = typer.Option(1.0, help="Temperature for generation"),
     top_p: float = typer.Option(1.0, help="Top-p sampling value"),
-    batch_size: int = typer.Option(128, help="Batch size for inference"),
     cache_size: int = typer.Option(1024 * 50, help="Cache size in tokens"),
     log_prompts: bool = typer.Option(False, help="Log prompts and responses"),
     upload: bool = typer.Option(False, help="Upload results to HF repo"),
     prompt_file: str = typer.Option("prompts/simple_prompt.yaml", help="Path to prompt file"),
+    reasoning_template: Optional[str] = typer.Option(None, help="Path to reasoning template YAML file for deep reasoning models"),
     mode: bool = typer.Option(False, "--submit/--test", help="Submit to production (--submit) or test environment (--test). Defaults to test mode."),
     sub_test: Optional[bool] = typer.Option(None, "--sub-test/--sub-prod", help="Override submission repository selection (test or prod). If not specified, follows the main mode."),
     score_test: Optional[bool] = typer.Option(None, "--score-test/--score-prod", help="Override score repository selection (test or prod). If not specified, follows the main mode."),
     test_samples: Optional[int] = typer.Option(None, help="Number of test samples to score"),
+    draft_model_dir: Optional[Path] = typer.Option(None, help="Directory for draft model (speculative decoding)"),
+    draft_cache_size: Optional[Path] = typer.Option(None, help="Cache size for draft model"),
 ):  # fmt: skip
-    """Run the scoring process, downloading new submissions and evaluating them."""
+    """Run the scoring process, downloading new submissions and evaluating them.
+
+    Parameters:
+        model_dir: Directory containing model files (deprecated, use model_dirs)
+        model_dirs: List of directories containing model files to use as judges
+        submissions_dir: Directory containing submissions
+        scores_dir: Directory to save scoring results
+        max_new_tokens: Maximum tokens to generate
+        temperature: Temperature for text generation
+        top_p: Top-p sampling value
+        cache_size: Cache size in tokens for model
+        log_prompts: Whether to log prompts and responses
+        upload: Whether to upload results to Hugging Face
+        prompt_file: Path to file with evaluation prompts
+        reasoning_template: Path to reasoning template YAML file for deep reasoning models
+        mode: Submit to production or test environment
+        sub_test/sub_prod: Override submission repository selection
+        score_test/score_prod: Override score repository selection
+        test_samples: Number of samples to test per submission
+        draft_model_dir: Directory for draft model (speculative decoding)
+        draft_cache_size: Cache size for draft model
+    """
 
     # Handle backward compatibility for model_dir vs model_dirs
     if model_dirs is None:
@@ -1819,7 +1842,6 @@ def run_scoring(
             console.print("[red]Error: At least one model directory must be provided via --model-dir or --model-dirs[/red]")
             return
         model_dirs = [model_dir]
-        console.print("[yellow]Warning: Using deprecated --model-dir parameter. Please use --model-dirs in the future.[/yellow]")
     elif model_dir is not None:
         # Both were provided, prioritize model_dirs but warn
         console.print("[yellow]Warning: Both --model-dir and --model-dirs provided. Using --model-dirs and ignoring --model-dir.[/yellow]")
@@ -1834,6 +1856,14 @@ def run_scoring(
     if not os.path.exists(prompt_file):
         console.print(f"[red]Error: Prompt file not found: {prompt_file}[/red]")
         return
+
+    # Handle deep reasoning mode
+    if reasoning_template is not None:
+        # Check that the reasoning template exists
+        if not os.path.exists(reasoning_template):
+            console.print(f"[red]Error: Reasoning template file {reasoning_template} not found[/red]")
+            return
+        console.print(f"[green]Using reasoning template: {reasoning_template}[/green]")
 
     # Extract model names (use directory name)
     model_names = [os.path.basename(os.path.normpath(d)) for d in model_dirs]
@@ -1969,11 +1999,13 @@ def run_scoring(
                 temperature=temperature,
                 top_p=top_p,
                 max_new_tokens=max_new_tokens,
-                batch_size=batch_size,
                 cache_size=cache_size,
                 log_prompts=log_prompts,
                 prompt_file=prompt_file,
                 sample=test_samples,  # Pass the test_samples parameter
+                draft_model_dir=draft_model_dir,
+                draft_cache_size=draft_cache_size,
+                reasoning_template=reasoning_template,  # Pass the reasoning template
             )
 
             # Validate scoring results before proceeding
