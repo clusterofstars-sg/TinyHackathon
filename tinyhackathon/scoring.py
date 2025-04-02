@@ -1,13 +1,11 @@
-from datetime import datetime, timedelta, timezone
 import json
-import os
 import re
+import shutil
 import tempfile
-import time
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Dict, List, Optional, Tuple, Union
-import shutil
 
 # Import from llm_scoring
 import llm_scoring
@@ -81,7 +79,7 @@ class UploadTracker:
             try:
                 return json.loads(self.state_file.read_text())
             except json.JSONDecodeError:
-                console.print(f"[yellow]Warning: Could not parse upload state file. Creating new state.[/yellow]")
+                console.print("[yellow]Warning: Could not parse upload state file. Creating new state.[/yellow]")
                 return {"last_upload": {}, "last_readme_update": None}
         return {"last_upload": {}, "last_readme_update": None}
 
@@ -127,327 +125,97 @@ class UploadTracker:
         return hours_since_update >= min_interval_hours
 
 
-class ScoringTracker:
-    """Tracks which submissions have been scored to avoid redundant scoring."""
+# File-based functions to replace ScoringTracker
+def is_submission_scored(username: str, submission_id: str, model_name: Optional[str] = None, base_dir: str = "submissions") -> bool:
+    """Check if a submission has been scored by looking for CSV files.
 
-    def __init__(self, state_file="state/scoring_state.json", is_test_mode=False):
-        # If default state file is used, apply test mode suffix
-        if state_file == "state/scoring_state.json" and is_test_mode:
-            state_file = "state/scoring_state_test.json"
+    Args:
+    username: The username of the submission owner
+        submission_id: The ID of the submission
+        model_name: Optional model name to check if this specific model has scored the submission
+    base_dir: Base directory for submissions
 
-        self.state_file = Path(state_file)
-        # Create the state directory if it doesn't exist
-        self.state_file.parent.mkdir(exist_ok=True, parents=True)
+    Returns:
+        True if the submission has been scored (by the specified model if model_name is provided)
+    """
+    submission_dir = Path(base_dir) / username / submission_id
 
-        # Check for old state file in root directory for backward compatibility
-        old_state_file = Path(".scoring_state.json")
-        if old_state_file.exists() and not self.state_file.exists():
-            # Migrate state from old location to new location
-            console.print(f"[yellow]Migrating scoring state from {old_state_file} to {self.state_file}[/yellow]")
-            self.state_file.parent.mkdir(exist_ok=True, parents=True)
-            old_state_file.rename(self.state_file)
+    # If the directory doesn't exist, the submission hasn't been scored
+    if not submission_dir.exists():
+        return False
 
-        self.state = self._load_state()
+    # If model_name is specified, check for that specific model's CSV file
+    if model_name is not None:
+        model_csv = submission_dir / f"{model_name}.csv"
+        return model_csv.exists()
 
-    def _load_state(self):
-        """Load saved scoring state or create empty state."""
-        if self.state_file.exists():
-            try:
-                return json.loads(self.state_file.read_text())
-            except json.JSONDecodeError:
-                console.print(f"[yellow]Warning: Could not parse scoring state file. Creating new state.[/yellow]")
-                return {"scored_submissions": {}}
-        return {"scored_submissions": {}}
+    # Otherwise, check if any model has scored this submission (look for any CSV file except summary files)
+    model_csvs = list(submission_dir.glob("*.csv"))
+    return any(csv_file.name != "submission_summary.csv" and csv_file.name != "score_history.csv" for csv_file in model_csvs)
 
-    def save_state(self):
-        """Save current state to disk with collision avoidance for parallel processing."""
-        # Re-read the current state file to get any changes made by other processes
-        if self.state_file.exists():
-            try:
-                # Read the current state from disk
-                disk_state = json.loads(self.state_file.read_text())
 
-                # Merge the disk state with our in-memory state
-                # For each username in our state
-                for username, user_data in self.state["scored_submissions"].items():
-                    # Ensure username exists in disk state
-                    if username not in disk_state["scored_submissions"]:
-                        disk_state["scored_submissions"][username] = {}
+def get_scored_models(username: str, submission_id: str, base_dir: str = "submissions") -> List[str]:
+    """Get list of models that have scored a submission by checking CSV files.
 
-                    # For each submission in our state
-                    for submission_id, submission_data in user_data.items():
-                        # If submission doesn't exist in disk state, copy it
-                        if submission_id not in disk_state["scored_submissions"][username]:
-                            disk_state["scored_submissions"][username][submission_id] = submission_data
-                        else:
-                            # Submission exists, merge the models list
-                            disk_models = disk_state["scored_submissions"][username][submission_id].get("models", [])
-                            our_models = submission_data.get("models", [])
+    Args:
+    username: The username of the submission owner
+        submission_id: The ID of the submission
+    base_dir: Base directory for submissions
 
-                            # Combine models from both states (use set to avoid duplicates)
-                            combined_models = list(set(disk_models + our_models))
+    Returns:
+        List of model names that have scored this submission
+    """
+    submission_dir = Path(base_dir) / username / submission_id
 
-                            # Update the disk state with combined models
-                            disk_state["scored_submissions"][username][submission_id]["models"] = combined_models
-                            # Update timestamp to most recent
-                            disk_state["scored_submissions"][username][submission_id]["timestamp"] = datetime.now().isoformat()
+    if not submission_dir.exists():
+        return []
 
-                # Use the merged state for writing
-                self.state = disk_state
+    # Get all CSV files except submission_summary.csv and score_history.csv
+    model_csvs = [
+        csv_file for csv_file in submission_dir.glob("*.csv") if csv_file.name not in ("submission_summary.csv", "score_history.csv")
+    ]
 
-            except json.JSONDecodeError:
-                # If the file is corrupted, we'll overwrite it with our state
-                console.print(f"[yellow]Warning: Could not parse scoring state file for merging. Overwriting with current state.[/yellow]")
+    # Extract model names from filenames (without .csv extension)
+    return [csv_file.stem for csv_file in model_csvs]
 
-        # Write the merged state back to disk
-        self.state_file.write_text(json.dumps(self.state, indent=2))
 
-    def is_submission_scored(self, username: str, submission_id: str, model_name: Optional[str] = None) -> bool:
-        """Check if a submission has already been scored.
+def get_all_scored_submissions(base_dir: str = "submissions") -> Dict[str, Dict[str, Dict[str, Union[List[str], str]]]]:
+    """Get all scored submissions by scanning the filesystem.
 
-        Args:
-            username: The username of the submission
-            submission_id: The ID of the submission
-            model_name: Optional model name to check if this specific model has scored the submission
+    Args:
+        base_dir: Base directory for submissions
 
-        Returns:
-            True if the submission has been scored (by the specified model if model_name is provided)
-        """
-        user_submissions = self.state["scored_submissions"].get(username, {})
+    Returns:
+        Dictionary mapping usernames to dictionaries mapping submission_ids to information about scored submissions
+    """
+    result = {"scored_submissions": {}}
+    base_path = Path(base_dir)
 
-        # If no submission entry exists, it's not scored
-        if submission_id not in user_submissions:
-            return False
+    # Scan all user directories
+    for user_dir in base_path.glob("*"):
+        if not user_dir.is_dir():
+            continue
 
-        # If no specific model is requested, check if any model has scored it
-        if model_name is None:
-            return bool(user_submissions.get(submission_id, {}).get("models", []))
+        username = user_dir.name
+        result["scored_submissions"][username] = {}
 
-        # Check if the specific model has scored this submission
-        return model_name in user_submissions.get(submission_id, {}).get("models", [])
+        # Scan all submission directories for this user
+        for submission_dir in user_dir.glob("*"):
+            if not submission_dir.is_dir():
+                continue
 
-    def get_scored_models(self, username: str, submission_id: str) -> List[str]:
-        """Get the list of models that have scored a submission.
+            submission_id = submission_dir.name
 
-        Args:
-            username: The username of the submission
-            submission_id: The ID of the submission
+            # Get scored models for this submission
+            scored_models = get_scored_models(username, submission_id, base_dir)
 
-        Returns:
-            List of model names that have scored this submission
-        """
-        user_submissions = self.state["scored_submissions"].get(username, {})
-        return user_submissions.get(submission_id, {}).get("models", [])
-
-    def mark_submission_scored(self, username: str, submission_id: str, model_name: str):
-        """Mark a submission as scored with a specific model.
-
-        Args:
-            username: Username of the submitter
-            submission_id: The ID of the submission
-            model_name: Name of the model used for scoring
-        """
-        # Initialize user entry if needed
-        if username not in self.state["scored_submissions"]:
-            self.state["scored_submissions"][username] = {}
-
-        # Initialize submission entry if needed
-        if submission_id not in self.state["scored_submissions"][username]:
-            # Use extracted timestamp instead of current time
-            self.state["scored_submissions"][username][submission_id] = {
-                "timestamp": extract_submission_datetime(submission_id),
-                "models": [],
-            }
-
-        # Add model to list if not already present
-        models = self.state["scored_submissions"][username][submission_id].get("models", [])
-        if model_name not in models:
-            models.append(model_name)
-            self.state["scored_submissions"][username][submission_id]["models"] = models
-            # Update timestamp to use submission timestamp
-            self.state["scored_submissions"][username][submission_id]["timestamp"] = extract_submission_datetime(submission_id)
-
-        # Save the updated state
-        self.save_state()
-
-    def sync_with_repository(self, repo_id: str, api: HfApi):
-        """Sync scoring state with HF repository to find already scored submissions."""
-        try:
-            # First try to download the scoring state file directly
-            try:
-                remote_state_path = "state/scoring_state.json"
-                if "test" in self.state_file.name:
-                    remote_state_path = "state/scoring_state_test.json"
-
-                # Create a temporary file for downloading
-                with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
-                    temp_path = Path(temp_file.name)
-
-                try:
-                    # Try to download the state file
-                    api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=remote_state_path, local_dir=temp_path.parent)
-
-                    downloaded_path = temp_path.parent / remote_state_path
-                    if downloaded_path.exists():
-                        # Read the remote state
-                        try:
-                            remote_state = json.loads(downloaded_path.read_text())
-                            console.print(f"[green]Downloaded scoring state from repository[/green]")
-
-                            # Merge with our local state
-                            if "scored_submissions" in remote_state:
-                                if "scored_submissions" not in self.state:
-                                    self.state["scored_submissions"] = {}
-
-                                # Merge each user's submissions
-                                for username, user_data in remote_state["scored_submissions"].items():
-                                    if username not in self.state["scored_submissions"]:
-                                        self.state["scored_submissions"][username] = {}
-
-                                    # Merge each submission
-                                    for submission_id, submission_data in user_data.items():
-                                        if submission_id not in self.state["scored_submissions"][username]:
-                                            self.state["scored_submissions"][username][submission_id] = submission_data
-                                        else:
-                                            # Merge models list
-                                            local_models = self.state["scored_submissions"][username][submission_id].get("models", [])
-                                            remote_models = submission_data.get("models", [])
-
-                                            # Combine models from both states
-                                            self.state["scored_submissions"][username][submission_id]["models"] = list(
-                                                set(local_models + remote_models)
-                                            )
-
-                            # Save the merged state
-                            self.save_state()
-                        except json.JSONDecodeError:
-                            console.print(
-                                f"[yellow]Could not parse downloaded scoring state file. Will rebuild from repository files.[/yellow]"
-                            )
-                except Exception as e:
-                    console.print(
-                        f"[yellow]Could not download scoring state file ({remote_state_path}): {e}. Will rebuild from repository files.[/yellow]"
-                    )
-            finally:
-                # Clean up the temp file if it exists
-                if "temp_path" in locals() and temp_path.exists():
-                    try:
-                        temp_path.unlink()
-                    except:
-                        pass
-
-            # Check for scored submissions in repository (as before)
-            files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
-
-            # Track how many new entries we found
-            new_entries = 0
-
-            # Look for submission summary files which indicate completed scoring
-            for file_path in files:
-                if "submission_summary.csv" in file_path:
-                    # Extract username and submission_id from path
-                    # Pattern: submissions/{username}/{submission_id}/submission_summary.csv
-                    parts = file_path.split("/")
-                    if len(parts) >= 4:
-                        username = parts[1]
-                        submission_id = parts[2]
-
-                        # Also check for model CSV files to determine which models have scored this
-                        model_files = [
-                            f
-                            for f in files
-                            if f.startswith(f"submissions/{username}/{submission_id}/")
-                            and f.endswith(".csv")
-                            and not f.endswith("submission_summary.csv")
-                        ]
-                        model_names = [Path(f).stem for f in model_files]
-
-                        # Mark as scored
-                        if username not in self.state["scored_submissions"]:
-                            self.state["scored_submissions"][username] = {}
-
-                        if submission_id not in self.state["scored_submissions"][username]:
-                            new_entries += 1
-                            self.state["scored_submissions"][username][submission_id] = {
-                                "timestamp": extract_submission_datetime(submission_id),
-                                "models": model_names,
-                            }
-                        else:
-                            # Update model list for existing entries
-                            existing_models = self.state["scored_submissions"][username][submission_id].get("models", [])
-                            updated_models = list(set(existing_models + model_names))
-                            if len(updated_models) > len(existing_models):
-                                new_entries += 1
-                                self.state["scored_submissions"][username][submission_id]["models"] = updated_models
-                                # Update timestamp to use submission timestamp
-                                self.state["scored_submissions"][username][submission_id]["timestamp"] = extract_submission_datetime(
-                                    submission_id
-                                )
-
-            self.save_state()
-            if new_entries > 0:
-                console.print(
-                    f"[green]Synchronized scoring state with repository: found {new_entries} new or updated submission scores[/green]"
+            if scored_models:
+                timestamp = (
+                    extract_submission_datetime(submission_id) if "extract_submission_datetime" in globals() else datetime.now().isoformat()
                 )
-            else:
-                console.print(f"[green]Scoring state synchronized with repository (no new entries found)[/green]")
-        except Exception as e:
-            console.print(f"[yellow]Could not sync scoring state with repository: {e}[/yellow]")
+                result["scored_submissions"][username][submission_id] = {"models": scored_models, "timestamp": timestamp}
 
-    def upload_to_repository(self, repo_id: str, api: HfApi):
-        """Upload scoring state to HF repository."""
-        try:
-            # Determine remote path based on filename
-            remote_path = "state/scoring_state.json"
-            if "test" in self.state_file.name:
-                remote_path = "state/scoring_state_test.json"
-
-            # Ensure state directory exists in repository
-            try:
-                files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
-                if "state" not in files:
-                    # Create empty file in state directory to ensure it exists
-                    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
-                        temp_file.write("")
-                        temp_path = temp_file.name
-
-                    api.upload_file(path_or_fileobj=temp_path, path_in_repo="state/.gitkeep", repo_id=repo_id, repo_type="dataset")
-
-                    # Clean up temp file
-                    Path(temp_path).unlink()
-            except Exception as e:
-                console.print(f"[yellow]Warning: Could not create state directory in repository: {e}[/yellow]")
-
-            # Upload the scoring state file
-            api.upload_file(path_or_fileobj=str(self.state_file), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
-            console.print(f"[green]Uploaded scoring state to repository: {remote_path}[/green]")
-            return True
-        except Exception as e:
-            console.print(f"[red]Error uploading scoring state to repository: {e}[/red]")
-            return False
-
-    def _merge_dictionaries(self, disk_state: Dict[str, Any]) -> None:
-        """Merge disk state with memory state."""
-        # Merge scored_submissions
-        if "scored_submissions" in disk_state:
-            for username, user_data in disk_state["scored_submissions"].items():
-                if username not in self.state["scored_submissions"]:
-                    self.state["scored_submissions"][username] = {}
-
-                for submission_id, submission_data in user_data.items():
-                    if submission_id not in self.state["scored_submissions"][username]:
-                        self.state["scored_submissions"][username][submission_id] = submission_data
-                    else:
-                        # Merge models lists
-                        disk_models = disk_state["scored_submissions"][username][submission_id].get("models", [])
-                        local_models = self.state["scored_submissions"][username][submission_id].get("models", [])
-                        combined_models = list(set(disk_models).union(set(local_models)))
-
-                        # Update models list
-                        self.state["scored_submissions"][username][submission_id]["models"] = combined_models
-
-                        # Update timestamp to use the submission date instead of current time
-                        self.state["scored_submissions"][username][submission_id]["timestamp"] = extract_submission_datetime(submission_id)
+    return result
 
 
 def download_new_submissions(
@@ -1506,7 +1274,7 @@ def _upload_submission_folder(
     try:
         # Upload the entire submission folder at once
         remote_path = f"submissions/{username}/{submission_id}"
-        response = api.upload_folder(folder_path=str(submission_dir), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
+        _ = api.upload_folder(folder_path=str(submission_dir), path_in_repo=remote_path, repo_id=repo_id, repo_type="dataset")
 
         # Mark all files as uploaded
         for file_path in csv_files:
@@ -1520,7 +1288,7 @@ def _upload_submission_folder(
         results["error"] += 1
 
         # Try individual files as fallback
-        console.print(f"[yellow]Attempting individual file uploads as fallback...[/yellow]")
+        console.print("[yellow]Attempting individual file uploads as fallback...[/yellow]")
         for file_path in files_to_upload:
             try:
                 remote_file_path = f"submissions/{username}/{submission_id}/{file_path.name}"
@@ -1644,7 +1412,7 @@ def upload_leaderboards(
 
     except Exception as e:
         console.print(f"[red]Error uploading leaderboard files using upload_folder: {e}[/red]")
-        console.print(f"[yellow]Falling back to individual file uploads...[/yellow]")
+        console.print("[yellow]Falling back to individual file uploads...[/yellow]")
 
         # Fall back to individual uploads
         for file_path in files_to_upload:
@@ -1803,7 +1571,7 @@ def update_repository_readme(
     is_test_mode = "Test" in repo_id
     tracker = UploadTracker(is_test_mode=is_test_mode)
     if not force_update and not tracker.should_update_readme():
-        console.print(f"[yellow]README was updated recently. Skipping update.[/yellow]")
+        console.print("[yellow]README was updated recently. Skipping update.[/yellow]")
         return True
 
     # Create temporary directory for README work
@@ -1856,7 +1624,7 @@ language: en
         try:
             api.upload_file(path_or_fileobj=str(readme_path), path_in_repo="README.md", repo_id=repo_id, repo_type="dataset")
             tracker.mark_readme_updated()
-            console.print(f"[green]Updated README.md with leaderboard information and YAML metadata[/green]")
+            console.print("[green]Updated README.md with leaderboard information and YAML metadata[/green]")
             return True
         except Exception as e:
             console.print(f"[red]Error uploading README: {e}[/red]")
@@ -1922,103 +1690,156 @@ def download_existing_scores(
     base_dir: str = "submissions",
     is_test_mode: bool = False,
 ) -> Dict[str, int]:
-    """Download existing score CSV files from repository for already scored submissions.
+    """Download all previously scored submissions from the HF repository.
+
+    This ensures we have the latest scores, including those scored by others.
 
     Args:
-        repo_id: Hugging Face repository ID
-        base_dir: Base directory to save score files
+        repo_id: Hugging Face repo ID
+        base_dir: Base directory to save scores
         is_test_mode: Whether to use test mode
 
     Returns:
         Dictionary with counts of downloaded files
     """
-    # Get authenticated API
+    console.print(f"[yellow]Downloading existing scores from {repo_id}...[/yellow]")
+
+    # Get HF API
     try:
-        api = get_authenticated_api()
+        _, api = get_hf_user()
     except Exception as e:
         console.print(f"[red]Authentication error: {e}[/red]")
         return {"downloaded": 0, "skipped": 0, "error": 1}
 
-    # Initialize scoring tracker to get the state
-    scoring_tracker = ScoringTracker(is_test_mode=is_test_mode)
-    # Sync with repository to ensure we have the latest state
-    scoring_tracker.sync_with_repository(repo_id, api)
-
-    # Get the list of all files in the repository
+    # Get all files in the repository
     try:
         files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
     except Exception as e:
         console.print(f"[red]Error listing repository files: {e}[/red]")
         return {"downloaded": 0, "skipped": 0, "error": 1}
 
+    # Track download statistics
     results = {"downloaded": 0, "skipped": 0, "error": 0}
 
-    # Process all submissions in the state
-    if "scored_submissions" in scoring_tracker.state:
-        for username, user_data in scoring_tracker.state["scored_submissions"].items():
-            for submission_id, submission_data in user_data.items():
-                # Create local submission directory
-                submission_dir = Path(base_dir) / username / submission_id
-                submission_dir.mkdir(parents=True, exist_ok=True)
+    # Find and download submission files
+    # First scan for summary files to determine which submissions have been scored
+    scored_submissions = {}
+    for file_path in files:
+        if "submission_summary.csv" in file_path:
+            # Extract username and submission_id from path
+            # Pattern: submissions/{username}/{submission_id}/submission_summary.csv
+            parts = file_path.split("/")
+            if len(parts) >= 4:
+                username = parts[1]
+                submission_id = parts[2]
 
-                # Download summary file if it exists
-                summary_path = f"submissions/{username}/{submission_id}/submission_summary.csv"
-                if summary_path in files:
-                    local_summary_path = submission_dir / "submission_summary.csv"
-                    if not local_summary_path.exists():
-                        try:
-                            downloaded_path = api.hf_hub_download(
-                                repo_id=repo_id, repo_type="dataset", filename=summary_path, local_dir=Path(base_dir)
-                            )
-                            results["downloaded"] += 1
-                            console.print(f"[green]Downloaded {summary_path}[/green]")
-                        except Exception as e:
-                            console.print(f"[red]Error downloading {summary_path}: {e}[/red]")
-                            results["error"] += 1
-                    else:
-                        results["skipped"] += 1
+                # Also check for model CSV files to determine which models have scored this
+                model_files = [
+                    f
+                    for f in files
+                    if f.startswith(f"submissions/{username}/{submission_id}/")
+                    and f.endswith(".csv")
+                    and not f.endswith("submission_summary.csv")
+                ]
+                model_names = [Path(f).stem for f in model_files]
 
-                # Download model-specific CSV files
-                models = submission_data.get("models", [])
-                for model_name in models:
-                    model_path = f"submissions/{username}/{submission_id}/{model_name}.csv"
-                    if model_path in files:
-                        local_model_path = submission_dir / f"{model_name}.csv"
-                        if not local_model_path.exists():
-                            try:
-                                downloaded_path = api.hf_hub_download(
-                                    repo_id=repo_id, repo_type="dataset", filename=model_path, local_dir=Path(base_dir)
-                                )
-                                results["downloaded"] += 1
-                                console.print(f"[green]Downloaded {model_path}[/green]")
-                            except Exception as e:
-                                console.print(f"[red]Error downloading {model_path}: {e}[/red]")
-                                results["error"] += 1
-                        else:
-                            results["skipped"] += 1
+                # Add to scored submissions
+                if username not in scored_submissions:
+                    scored_submissions[username] = {}
 
-    # Download user history files
-    for username in scoring_tracker.state.get("scored_submissions", {}):
-        history_path = f"submissions/{username}/score_history.csv"
-        if history_path in files:
-            local_user_dir = Path(base_dir) / username
-            local_user_dir.mkdir(parents=True, exist_ok=True)
-            local_history_path = local_user_dir / "score_history.csv"
-            if not local_history_path.exists():
-                try:
-                    downloaded_path = api.hf_hub_download(
-                        repo_id=repo_id, repo_type="dataset", filename=history_path, local_dir=Path(base_dir)
-                    )
+                if submission_id not in scored_submissions[username]:
+                    scored_submissions[username][submission_id] = {
+                        "timestamp": extract_submission_datetime(submission_id),
+                        "models": model_names,
+                    }
+                else:
+                    # Update model list
+                    existing_models = scored_submissions[username][submission_id].get("models", [])
+                    updated_models = list(set(existing_models + model_names))
+                    scored_submissions[username][submission_id]["models"] = updated_models
+                    # Update timestamp
+                    scored_submissions[username][submission_id]["timestamp"] = extract_submission_datetime(submission_id)
+
+    # Download all summary files first
+    console.print("[yellow]Downloading submission summaries and model scores...[/yellow]")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+    ) as progress:
+        task = progress.add_task("Downloading...", total=len(files))
+
+        for file_path in files:
+            # Only process files in the submissions directory
+            if not file_path.startswith("submissions/"):
+                progress.update(task, advance=1)
+                continue
+
+            # Extract parts
+            parts = file_path.split("/")
+            if len(parts) < 4:
+                progress.update(task, advance=1)
+                continue
+
+            username = parts[1]
+            submission_id = parts[2]
+            filename = parts[3]
+
+            # Create directory structure
+            submission_dir = Path(base_dir) / username / submission_id
+            submission_dir.mkdir(parents=True, exist_ok=True)
+
+            # Download the file
+            local_path = submission_dir / filename
+            try:
+                if not local_path.exists():
+                    _ = api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=file_path, local_dir=Path(base_dir))
                     results["downloaded"] += 1
-                    console.print(f"[green]Downloaded {history_path}[/green]")
+                else:
+                    results["skipped"] += 1
+            except Exception as e:
+                console.print(f"[red]Error downloading {file_path}: {e}[/red]")
+                results["error"] += 1
+
+            progress.update(task, advance=1)
+
+    # Download user histories
+    for username in scored_submissions:
+        history_path = f"submissions/{username}/score_history.csv"
+        local_history_path = Path(base_dir) / username / "score_history.csv"
+
+        if history_path in files:
+            if not local_history_path.exists() or is_test_mode:  # Always download in test mode for testing
+                try:
+                    _ = api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=history_path, local_dir=Path(base_dir))
+                    results["downloaded"] += 1
+                    console.print(f"[green]Downloaded user history for {username}[/green]")
                 except Exception as e:
-                    console.print(f"[red]Error downloading {history_path}: {e}[/red]")
+                    console.print(f"[red]Error downloading history for {username}: {e}[/red]")
                     results["error"] += 1
             else:
+                console.print(f"[blue]Skipped existing user history for {username}[/blue]")
                 results["skipped"] += 1
 
+    # Download leaderboard files
+    leaderboard_files = [f for f in files if f.startswith("leaderboards/")]
+    for file_path in leaderboard_files:
+        local_path = Path(file_path)  # Relative path from workspace root
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if not local_path.exists() or is_test_mode:  # Always download in test mode
+                _ = api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=file_path)
+                results["downloaded"] += 1
+            else:
+                results["skipped"] += 1
+        except Exception as e:
+            console.print(f"[red]Error downloading {file_path}: {e}[/red]")
+            results["error"] += 1
+
     console.print(
-        f"[green]Downloaded {results['downloaded']} score files, skipped {results['skipped']} existing files, {results['error']} errors[/green]"
+        f"[green]Downloaded {results['downloaded']} files, skipped {results['skipped']} existing files, encountered {results['error']} errors[/green]"
     )
     return results
 
@@ -2070,7 +1891,32 @@ def run_scoring(
         test_samples: Number of samples to test per submission
         draft_model_dir: Directory for draft model (speculative decoding)
         draft_cache_size: Cache size for draft model
+        config: Path to configuration file for setting options
     """
+    # Handle test mode
+    use_test_mode = not mode  # False = test, True = submit
+    use_test_sub = sub_test if sub_test is not None else use_test_mode
+    use_test_score = score_test if score_test is not None else use_test_mode
+
+    # Print test/submission mode status
+    if mode:
+        console.print("[bold green]Running in production mode[/bold green]")
+    else:
+        console.print("[bold yellow]Running in test mode[/bold yellow]")
+
+    # Set up API for upload if needed
+    if upload:
+        try:
+            _, api = get_hf_user()
+            console.print("[green]Successfully authenticated with Hugging Face[/green]")
+        except Exception as e:
+            console.print(f"[red]Error authenticating with Hugging Face: {e}[/red]")
+            console.print("[red]Continuing without upload capability[/red]")
+            upload = False
+
+    # Set up input and output directories
+    submission_dir = submissions_dir or "downloaded_submissions"
+    scores_dir_path = scores_dir or "submissions"
 
     # Handle backward compatibility for model_dir vs model_dirs
     if model_dirs is None:
@@ -2082,85 +1928,33 @@ def run_scoring(
         # Both were provided, prioritize model_dirs but warn
         console.print("[yellow]Warning: Both --model-dir and --model-dirs provided. Using --model-dirs and ignoring --model-dir.[/yellow]")
 
-    # Validate that model directories exist
-    for directory in model_dirs:
-        if not os.path.isdir(directory):
-            console.print(f"[red]Error: Model directory not found: {directory}[/red]")
-            return
-
-    # Validate that prompt file exists
-    if not os.path.exists(prompt_file):
-        console.print(f"[red]Error: Prompt file not found: {prompt_file}[/red]")
-        return
-
-    # Handle deep reasoning mode
-    if reasoning_template is not None:
-        # Check that the reasoning template exists
-        if not os.path.exists(reasoning_template):
-            console.print(f"[red]Error: Reasoning template file {reasoning_template} not found[/red]")
-            return
-        console.print(f"[green]Using reasoning template: {reasoning_template}[/green]")
-
-    # Extract model names (use directory name)
-    model_names = [os.path.basename(os.path.normpath(d)) for d in model_dirs]
+    # Extract model names (use directory basename)
+    model_names = [Path(d).name for d in model_dirs]
     console.print(f"[blue]Using {len(model_names)} judging models: {', '.join(model_names)}[/blue]")
 
-    # Resolve which mode to use for inputs and outputs
-    # If specific overrides aren't provided, follow the main mode
-    use_test_sub = sub_test if sub_test is not None else not mode
-    use_test_score = score_test if score_test is not None else not mode
+    # Get submissions (download new ones if needed)
+    submissions_repo_id = (
+        "cluster-of-stars/TinyStoriesHackathon_Submissions_Test" if use_test_sub else "cluster-of-stars/TinyStoriesHackathon_Submissions"
+    )
+    output_repo_id = (
+        "cluster-of-stars/TinyStoriesHackathon_Scores_Test" if use_test_score else "cluster-of-stars/TinyStoriesHackathon_Scores"
+    )
 
-    # Provide feedback about the mode
-    if not mode:
-        console.print("[yellow]TEST MODE - scoring will use test repositories and directories[/yellow]")
-        if use_test_sub != use_test_score:
-            console.print(f"[yellow]MIXED MODE - Submissions: {'TEST' if use_test_sub else 'PRODUCTION'}, Scores: {'TEST' if use_test_score else 'PRODUCTION'}[/yellow]")  # fmt: skip
+    # Download new submissions from the appropriate repository (test or prod)
+    console.print(f"[yellow]Downloading new submissions from {submissions_repo_id}...[/yellow]")
+    new_submissions = download_new_submissions(dataset_id=submissions_repo_id, output_dir=submission_dir, is_test_mode=use_test_sub)
+    if new_submissions:
+        console.print(f"[green]Downloaded {len(new_submissions)} new submissions[/green]")
     else:
-        console.print("[green]PRODUCTION MODE - scoring will use production repositories and directories[/green]")
-        if use_test_sub != use_test_score:
-            console.print(f"[yellow]MIXED MODE - Submissions: {'TEST' if use_test_sub else 'PRODUCTION'}, Scores: {'TEST' if use_test_score else 'PRODUCTION'}[/yellow]")  # fmt: skip
+        console.print("[yellow]No new submissions to download[/yellow]")
 
-    # Set repository IDs based on mode
-    if use_test_sub:
-        submission_repo_id = "cluster-of-stars/TinyStoriesHackathon_Submissions_Test"
-        submission_dir = submissions_dir or "downloaded_submissions_test"
-    else:
-        submission_repo_id = "cluster-of-stars/TinyStoriesHackathon_Submissions"
-        submission_dir = submissions_dir or "downloaded_submissions"
-
-    if use_test_score:
-        output_repo_id = "cluster-of-stars/TinyStoriesHackathon_Scores_Test"
-        scores_dir_path = scores_dir or "scores_test"
-    else:
-        output_repo_id = "cluster-of-stars/TinyStoriesHackathon_Scores"
-        scores_dir_path = scores_dir or "scores"
-
-    # Print repository information
-    console.print(f"[blue]Submission Repository: {submission_repo_id}[/blue]")
-    console.print(f"[blue]Local Submissions Directory: {submission_dir}[/blue]")
-    console.print(f"[blue]Score Repository: {output_repo_id}[/blue]")
-    console.print(f"[blue]Local Scores Directory: {scores_dir_path}[/blue]")
-
-    # Download new submissions
-    if upload and not mode:
-        console.print("[yellow]In test mode with upload enabled - will wait 3 seconds before proceeding...[/yellow]")
-        for i in range(3, 0, -1):
-            console.print(f"[yellow]    {i} seconds remaining...[/yellow]")
-            time.sleep(1)
-
-    # Download new submissions
-    console.print(f"[yellow]Downloading new submissions from {submission_repo_id}...[/yellow]")
-    new_submissions = download_new_submissions(dataset_id=submission_repo_id, output_dir=submission_dir, is_test_mode=use_test_sub)
-    console.print(f"[green]Found {len(new_submissions)} new or updated submissions[/green]")
-
-    # Initialize scoring tracker and sync with repository if uploading
-    scoring_tracker = ScoringTracker(is_test_mode=use_test_score)
+    # Download existing scores to avoid duplication
     if upload:
         try:
-            api = get_authenticated_api()
-            scoring_tracker.sync_with_repository(output_repo_id, api)
+            console.print(f"[yellow]Downloading existing scores from {output_repo_id}...[/yellow]")
+            download_existing_scores(repo_id=output_repo_id, base_dir=scores_dir_path, is_test_mode=use_test_score)
         except Exception as e:
-            console.print(f"[yellow]Could not authenticate to sync scoring state: {e}[/yellow]")
+            console.print(f"[yellow]Could not authenticate to sync with repository: {e}[/yellow]")
 
     # Determine which submissions need scoring for each model
     unscored_files_by_model = {model_name: [] for model_name in model_names}
@@ -2186,7 +1980,7 @@ def run_scoring(
             # Check which models need to score this submission
             for model_name in model_names:
                 # Check if this model has already scored this submission
-                if not scoring_tracker.is_submission_scored(username, submission_id, model_name):
+                if not is_submission_scored(username, submission_id, model_name, base_dir=scores_dir_path):
                     unscored_files_by_model[model_name].append(
                         {
                             "username": username,
@@ -2221,128 +2015,128 @@ def run_scoring(
 
         console.print(f"[yellow]Processing {len(unscored_files)} submissions with model {model_name}...[/yellow]")
 
-        # Get CSV paths for this model's unscored submissions
-        all_csv_paths = [item["csv_path"] for item in unscored_files]
-
         if test_samples:
             console.print(f"[yellow]Limiting to {test_samples} samples per submission for testing[/yellow]")
 
-        # Score submissions with this model
-        try:
-            all_scores = llm_scoring.score_submission(
-                submission_file=all_csv_paths,
-                model_dir=model_dir,
-                temperature=temperature,
-                top_p=top_p,
-                max_new_tokens=max_new_tokens,
-                cache_size=cache_size,
-                log_prompts=log_prompts,
-                prompt_file=prompt_file,
-                sample=test_samples,  # Pass the test_samples parameter
-                draft_model_dir=draft_model_dir,
-                draft_cache_size=draft_cache_size,
-                reasoning_template=reasoning_template,  # Pass the reasoning template
-            )
+        # Score the submissions
+        console.print(f"[yellow]Loading model from {model_dir}...[/yellow]")
 
-            # Validate scoring results before proceeding
-            if not validate_scoring_results(all_scores):
-                console.print(f"[red]Error: Scoring results for model {model_name} are invalid or empty. Skipping this model.[/red]")
+        # Process submissions in chunks to avoid memory issues
+        chunk_size = 10  # Process 10 submissions at a time
+        for i in range(0, len(unscored_files), chunk_size):
+            chunk = unscored_files[i : i + min(chunk_size, len(unscored_files) - i)]
+            all_scores = {}
+
+            # Create the model instance
+            model_params = {
+                "model_dir": model_dir,
+                "max_new_tokens": max_new_tokens,
+                "temperature": temperature,
+                "top_p": top_p,
+                "cache_size": cache_size,
+                "prompt_file": prompt_file,
+                "reasoning_template": reasoning_template,
+                "log_prompts": log_prompts,
+                "draft_model_dir": draft_model_dir,
+                "draft_cache_size": draft_cache_size,
+            }
+
+            try:
+                # Score the submissions in this chunk
+                all_scores = llm_scoring.score_submissions(
+                    csv_paths=[str(item["csv_path"]) for item in chunk],
+                    model_params=model_params,
+                    test_samples=test_samples,
+                )
+            except Exception as e:
+                console.print(f"[red]Error scoring submissions: {e}[/red]")
                 continue
 
-        except Exception as e:
-            console.print(f"[red]Error during scoring with model {model_name}: {e}[/red]")
-            console.print("[red]Skipping this model and continuing with others.[/red]")
-            continue
+            # Process the results
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TextColumn("• {task.elapsed}"),
+            ) as progress:
+                task = progress.add_task(f"Saving results for {model_name}", total=len(chunk))
 
-        # Process and save results for this model
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task(f"[green]Saving scoring results for model {model_name}...", total=len(unscored_files))
+                for item in chunk:
+                    username = item["username"]
+                    submission_id = item["submission_id"]
+                    csv_path = item["csv_path"]
 
-            for item in unscored_files:
-                username = item["username"]
-                submission_id = item["submission_id"]
-                csv_path = item["csv_path"]
+                    progress.update(task, description=f"Processing {username}/{submission_id}")
 
-                if username in all_scores and submission_id in all_scores[username]:
-                    # Read original submission to get prompts and completions
-                    try:
-                        df = pd.read_csv(csv_path)
-                        if "prompt" not in df.columns or "completion" not in df.columns:
-                            console.print(f"[red]Error: Missing required columns in {csv_path}. Skipping.[/red]")
-                            progress.update(task, advance=1)
-                            continue
+                    if username in all_scores and submission_id in all_scores[username]:
+                        # Read original submission to get prompts and completions
+                        try:
+                            df = pd.read_csv(csv_path)
+                            if "prompt" not in df.columns or "completion" not in df.columns:
+                                console.print(f"[red]Error: Missing required columns in {csv_path}. Skipping.[/red]")
+                                progress.update(task, advance=1)
+                                continue
 
-                        prompts = df["prompt"].tolist()
-                        completions = df["completion"].tolist()
+                            prompts = df["prompt"].tolist()
+                            completions = df["completion"].tolist()
 
-                        # Extract scores for this submission
-                        submission_scores = all_scores[username][submission_id]
+                            # Extract scores for this submission
+                            submission_scores = all_scores[username][submission_id]
 
-                        # Get this model's results
-                        current_model_name = list(submission_scores.keys())[0]  # We'll rename this to our model_name
-                        item_scores = submission_scores[current_model_name]["details"]
+                            # Get this model's results
+                            current_model_name = list(submission_scores.keys())[0]  # We'll rename this to our model_name
+                            item_scores = submission_scores[current_model_name]["details"]
 
-                        # Validate item scores
-                        if not item_scores:
-                            console.print(
-                                f"[red]Error: No valid scores for {username}/{submission_id} with model {model_name}. Skipping.[/red]"
-                            )
-                            progress.update(task, advance=1)
-                            continue
+                            # Validate item scores
+                            if not item_scores:
+                                console.print(
+                                    f"[red]Error: No valid scores for {username}/{submission_id} with model {model_name}. Skipping.[/red]"
+                                )
+                                progress.update(task, advance=1)
+                                continue
 
-                        # Create a dictionary of item_id to scores
-                        item_scores_dict = {entry["item_id"]: entry["scores"] for entry in item_scores}
+                            # Create a dictionary of item_id to scores
+                            item_scores_dict = {entry["item_id"]: entry["scores"] for entry in item_scores}
 
-                        # Verify scores contain actual values
-                        if not any(scores for scores in item_scores_dict.values()):
-                            console.print(
-                                f"[red]Error: Empty scores for {username}/{submission_id} with model {model_name}. Skipping.[/red]"
-                            )
-                            progress.update(task, advance=1)
-                            continue
+                            # Verify scores contain actual values
+                            if not any(scores for scores in item_scores_dict.values()):
+                                console.print(
+                                    f"[red]Error: Empty scores for {username}/{submission_id} with model {model_name}. Skipping.[/red]"
+                                )
+                                progress.update(task, advance=1)
+                                continue
 
-                        # Save model CSV with our defined model_name
-                        saved_path = save_model_csv(
-                            username=username,
-                            submission_id=submission_id,
-                            model_name=model_name,  # Use our defined model name
-                            prompts=prompts,
-                            completions=completions,
-                            item_scores=item_scores_dict,
-                            base_dir=scores_dir_path,
-                            overwrite=True,
-                        )
-
-                        # Verify the CSV was written with actual data
-                        if saved_path.exists():
-                            try:
-                                saved_df = pd.read_csv(saved_path)
-                                if not saved_df.empty and any(col.lower() in saved_df.columns for col in ScoreCategory):
-                                    # Mark this model as having scored this submission
-                                    scoring_tracker.mark_submission_scored(username, submission_id, model_name)
-                                    # Add to successfully scored submissions
-                                    successfully_scored_submissions.add((username, submission_id))
-                                else:
-                                    console.print(f"[red]Error: Saved CSV {saved_path} is empty or missing score columns. Skipping.[/red]")
-                            except Exception as e:
-                                console.print(f"[red]Error validating saved CSV {saved_path}: {e}. Skipping.[/red]")
-                        else:
-                            console.print(
-                                f"[red]Error: Failed to save CSV for {username}/{submission_id} with model {model_name}. Skipping.[/red]"
+                            # Save model CSV with our defined model_name
+                            saved_path = save_model_csv(
+                                username=username,
+                                submission_id=submission_id,
+                                model_name=model_name,  # Use our defined model name
+                                prompts=prompts,
+                                completions=completions,
+                                item_scores=item_scores_dict,
+                                base_dir=scores_dir_path,
+                                overwrite=True,
                             )
 
-                    except Exception as e:
-                        console.print(f"[red]Error processing {username}/{submission_id} with model {model_name}: {e}. Skipping.[/red]")
+                            # Verify the CSV was written with actual data
+                            if saved_path.exists():
+                                try:
+                                    saved_df = pd.read_csv(saved_path)
+                                    if not saved_df.empty and any(col.lower() in saved_df.columns for col in ScoreCategory):
+                                        # Add to successfully scored submissions
+                                        successfully_scored_submissions.add((username, submission_id))
+                                    else:
+                                        console.print(f"[red]Error: Saved CSV {saved_path} is empty or missing score columns. Skipping.[/red]")  # fmt: skip
+                                except Exception as e:
+                                    console.print(f"[red]Error validating saved CSV {saved_path}: {e}. Skipping.[/red]")
+                            else:
+                                console.print(f"[red]Error: Failed to save CSV for {username}/{submission_id} with model {model_name}. Skipping.[/red]")  # fmt: skip
 
-                progress.update(task, advance=1)
+                        except Exception as e:
+                            console.print(f"[red]Error processing {username}/{submission_id} with model {model_name}: {e}. Skipping.[/red]")
+
+                    progress.update(task, advance=1)
 
         console.print(f"[green]Completed scoring with model {model_name}[/green]")
 
@@ -2355,22 +2149,19 @@ def run_scoring(
 
     # After all models have scored, generate/update submission summaries
     console.print("[yellow]Generating submission summaries...[/yellow]")
-
-    # Generate summaries only for successfully scored submissions
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         MofNCompleteColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
-        TimeElapsedColumn(),
-        console=console,
+        TextColumn("• {task.elapsed}"),
     ) as progress:
-        task = progress.add_task("[green]Generating submission summaries...", total=len(successfully_scored_submissions))
+        task = progress.add_task("Generating summaries", total=len(successfully_scored_submissions))
 
         for username, submission_id in successfully_scored_submissions:
+            progress.update(task, description=f"Processing {username}/{submission_id}")
             try:
-                # Save submission summary
+                # Generate summary
                 summary_path = save_submission_summary(
                     username=username,
                     submission_id=submission_id,
@@ -2410,94 +2201,37 @@ def run_scoring(
             console.print(f"[yellow]Downloading existing score files from {output_repo_id}...[/yellow]")
             download_existing_scores(repo_id=output_repo_id, base_dir=scores_dir_path, is_test_mode=use_test_score)
 
-        leaderboard_files = generate_and_save_all_leaderboards(base_dir=scores_dir_path)
-        if not leaderboard_files.empty:
+        leaderboard_df = generate_and_save_all_leaderboards(base_dir=scores_dir_path)
+        if not leaderboard_df.empty:
             console.print("[green]Leaderboards generated successfully[/green]")
+            if upload:
+                console.print("[yellow]Uploading leaderboards...[/yellow]")
+                upload_leaderboards(repo_id=output_repo_id)
         else:
             console.print("[red]Error: Generated leaderboards are empty. Skipping upload.[/red]")
-            return
     except Exception as e:
-        console.print(f"[red]Error generating leaderboards: {e}. Skipping upload.[/red]")
-        return
+        console.print(f"[red]Error generating leaderboards: {e}[/red]")
 
-    # Upload results if requested
+    # Upload results to Hugging Face if requested
     if upload:
         console.print(f"[yellow]Uploading results to {output_repo_id}...[/yellow]")
-
-        # Upload user files
-        user_upload_results = upload_all_user_files(base_dir=scores_dir_path, repo_id=output_repo_id)
-        console.print(f"[green]Uploaded {user_upload_results.get('uploaded', 0)} user files[/green]")
-
-        # Upload leaderboards
-        leaderboard_upload_results = upload_leaderboards(repo_id=output_repo_id)
-        console.print(f"[green]Uploaded {leaderboard_upload_results.get('uploaded', 0)} leaderboard files[/green]")
-
-        # Update repository README - force update if any submissions were scored
-        readme_updated = update_repository_readme(repo_id=output_repo_id, force_update=len(successfully_scored_submissions) > 0)
-        if readme_updated:
-            console.print("[green]Updated repository README[/green]")
-        else:
-            console.print("[yellow]README update failed[/yellow]")
-
-        # Sync with repository again to prevent race conditions before uploading final state
         try:
-            console.print("[yellow]Syncing scoring state before final upload...[/yellow]")
-            scoring_tracker.sync_with_repository(output_repo_id, api)
+            results = upload_all_user_files(base_dir=scores_dir_path, repo_id=output_repo_id)
+            console.print(f"[green]Upload complete: {results.get('uploaded', 0)} files uploaded, {results.get('skipped', 0)} files skipped, {results.get('error', 0)} errors[/green]")  # fmt: skip
         except Exception as e:
-            console.print(f"[yellow]Could not sync scoring state before final upload: {e}[/yellow]")
+            console.print(f"[red]Error uploading results: {e}[/red]")
 
-        # Upload scoring state again after all processing is complete (in case more scores were added)
+        # Update repository README with leaderboard section
+        console.print("[yellow]Updating repository README...[/yellow]")
         try:
-            scoring_tracker.upload_to_repository(output_repo_id, api)
+            if update_repository_readme(repo_id=output_repo_id):
+                console.print("[green]Repository README updated successfully[/green]")
+            else:
+                console.print("[yellow]Repository README not updated (not needed or not possible)[/yellow]")
         except Exception as e:
-            console.print(f"[yellow]Could not upload final scoring state: {e}[/yellow]")
+            console.print(f"[red]Error updating repository README: {e}[/red]")
 
-    console.print("[green]Scoring complete![/green]")
-
-    # Display leaderboard preview
-    display_leaderboard_preview(leaderboard_files)
-
-
-# Add a new function to validate scoring results
-def validate_scoring_results(scores: Dict[str, Dict[str, Dict[str, Any]]]) -> bool:
-    """Validate that scoring results contain actual data.
-
-    Args:
-        scores: The scoring dictionary to validate
-
-    Returns:
-        True if results are valid, False otherwise
-    """
-    if not scores:
-        return False
-
-    # Check that we have user entries
-    for username, user_data in scores.items():
-        if not user_data:
-            return False
-
-        # Check each submission
-        for submission_id, submission_data in user_data.items():
-            if not submission_data:
-                return False
-
-            # Check each model
-            for model_name, model_data in submission_data.items():
-                # Verify we have details and they contain actual scores
-                if not model_data or "details" not in model_data or not model_data["details"]:
-                    return False
-
-                # Check each detail item has scores
-                for detail in model_data["details"]:
-                    if "item_id" not in detail or "scores" not in detail or not detail["scores"]:
-                        return False
-
-                    # Verify scores contain numerical values
-                    for category, score in detail["scores"].items():
-                        if not isinstance(score, (int, float)) or score <= 0:
-                            return False
-
-    return True
+    console.print("[green]Scoring process completed[/green]")
 
 
 @app.command()
