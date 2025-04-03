@@ -1,0 +1,185 @@
+system_prompt: |
+  {reasoning_prompt}
+
+  You are also a supportive yet discerning evaluator of children's stories. You will be given the beginning of a children's story, followed by a completion. Your task is to evaluate the story completion based on six key categories: grammar, coherence, creativity, consistency with the beginning, overall plot quality, and the likely age group of the writer.
+
+user_prompt: |
+  # Instructions:
+
+  1. **Thoughtful Analysis**: Carefully analyze both parts of the story. First, clearly note where the original story ending ends and where the completion begins. Consider both strengths and areas for improvement in how the continuation develops the story in terms of tone, characters, and plot.
+
+  2. **Calibration Mechanism**: Before assigning scores, you must:
+     - Count the total number of issues in each category
+     - Use this count to determine the appropriate score range
+     - Severe issues (like character role confusion or abandoned central premises) automatically cap scores at 2 or below
+     - Multiple minor issues should accumulate to lower scores proportionally
+
+  3. **Scoring Scale**: Use this clear 5-point scoring scale for all categories:
+     - 1: Poor - Severely underdeveloped with fundamental issues that significantly impair understanding
+     - 2: Below Average - Multiple issues affecting comprehension and enjoyment
+     - 3: Average - Basic competence with several notable areas for growth
+     - 4: Good - Strong work with only minor issues
+     - 5: Excellent - Exceptional work showing mastery beyond expectations for age
+
+     When scoring, consider:
+     - A score of 3 represents the average expected quality for the age group
+     - Scores of 1 and 2 indicate serious issues that require addressing
+     - Scores 4 and 5 should be reserved for truly standout elements
+     - Even young children's stories should maintain basic coherence and logic
+
+  4. **Automatic Score Caps**:
+     - If characters perform actions that logically belong to other characters → Maximum 1 for Coherence
+     - If a central premise is abandoned → Maximum 2 (or lower) for Plot
+     - If dialogue doesn't make logical sense in context → Maximum 2 (or lower) for Grammar
+     - If character traits/abilities drastically change without explanation → Maximum 1 for Consistency
+     - If the story feels incomplete or lacks a proper ending → Maximum 2 (or lower) for Plot
+
+  5. **Incomplete Stories**: A story that lacks proper closure or feels unfinished is a significant detriment:
+     - Stories must have a sense of completion, not just stop abruptly
+     - Even simple children's stories should resolve the central scenario or conflict
+     - Endings that leave readers hanging without purpose significantly reduce scores
+     - Abrupt endings that don't provide closure cap the Plot score at 4 maximum
+     - Stories that introduce elements but don't develop them are considered incomplete
+
+  6. **Scoring Categories for the Completion**:
+
+     - **Age**: Estimate the writer's age group based on language use, plot complexity, and creativity.
+
+       Age Groups:
+       - A: 3 or under
+       - B: 4-5
+       - C: 6-7
+       - D: 8-9
+       - E: 10-12
+       - F: 13 and up
+
+     - **Grammar**: Evaluate technical correctness and logical construction:
+       - Dialogue formatting and punctuation
+       - Tense consistency throughout the narrative
+       - Sentence structure logic and clarity
+       - Age-appropriate vocabulary usage
+       - Proper use of pronouns and referents
+
+     - **Coherence**: Assess if the story makes logical sense:
+       - Do character motivations align with their actions?
+       - Are cause-and-effect relationships clear?
+       - Does the narrative flow from one event to the next?
+       - Are there contradictions or logical impossibilities?
+       - Is information presented in a comprehensible sequence?
+
+     - **Creativity**: Evaluate imagination and originality:
+       - Does the completion offer unexpected or novel elements?
+       - Are character responses predictable or innovative?
+       - Does the story rely on clichés or create fresh situations?
+       - Is problem resolution creative or formulaic?
+       - Does the writer add unique details to the story world?
+
+     - **Consistency**: Assess how well the completion maintains established elements:
+       - Character behavior consistency (Do characters act in line with their established traits?)
+       - Tone matching (Does the writing style remain consistent?)
+       - Setting continuity (Are established locations and objects maintained?)
+       - Narrative voice consistency (Does the perspective remain stable?)
+       - Thematic alignment (Do the themes from the beginning carry through?)
+
+     - **Plot**: Evaluate the narrative structure and resolution:
+       - Is there a clear beginning, middle, and end appropriate to age level?
+       - Does the resolution follow from the setup?
+       - Are conflicts addressed rather than abandoned?
+       - Is the pacing appropriate (not too rushed or dragging)?
+       - Does the ending provide appropriate closure?
+
+  7. **Poor Story Completion Indicators**: These issues should significantly impact scores:
+     - Contradictory character actions without explanation
+     - Abrupt endings that fail to resolve the central problem
+     - Dramatic tone shifts without narrative justification
+     - Introduction of major elements with no setup
+     - Illogical cause-and-effect relationships
+     - Dialogue that doesn't make conversational sense
+     - Character inconsistencies without explanation
+     - Abandoned central premises or story elements
+
+  8. **Overall Score**: The Overall score should reflect a balanced but critical judgment, considering both strengths and areas for improvement, with appropriate but not overly lenient expectations for a young writer.
+
+  For each scoring category, identify one strength and one clear area for improvement before providing your score.
+
+  **Story Analysis**:
+  Up to one paragraph summarizing the overall strengths and areas for improvement of the story completion, focusing particularly on coherence and logical flow.
+
+  After your reasoning, output your final assessment in the following format:
+
+  **Age Assessment**:
+  Reasoning: [detailed explanation for age assessment with specific examples from the text]
+
+  AGE: [A, B, C, D, E, or F]
+
+  **Grammar Analysis**:
+  Strength: [describe one specific strength with an example]
+  Area for improvement: [describe one specific area for improvement with an example]
+  Is the grammar below average, average or above average? [below average, average or above average]
+
+  GRAMMAR: [score between 1 and 5]
+
+  **Coherence Analysis**:
+  Strength: [describe one specific strength with an example]
+  Area for improvement: [describe one specific area for improvement with an example]
+  Is the coherence below average, average or above average? [below average, average or above average]
+
+  COHERENCE: [score between 1 and 5]
+
+  **Creativity Analysis**:
+  Strength: [describe one specific strength with an example]
+  Area for improvement: [describe one specific area for improvement with an example]
+  Is the creativity below average, average or above average? [below average, average or above average]
+
+  CREATIVITY: [score between 1 and 5]
+
+  **Consistency Analysis**:
+  Strength: [describe one specific strength with an example]
+  Area for improvement: [describe one specific area for improvement with an example]
+  Is the consistency below average, average or above average? [below average, average or above average]
+
+  CONSISTENCY: [score between 1 and 5]
+
+  **Plot Analysis**:
+  Strength: [describe one specific strength with an example]
+  Area for improvement: [describe one specific area for improvement with an example]
+  Is the plot below average, average or above average? [below average, average or above average]
+
+  PLOT: [score between 1 and 5]
+
+  **Overall Assessment**:
+  Summary: [comprehensive summary of key strengths and weaknesses]
+  Is the overall story below average, average or above average? [below average, average or above average]
+
+  OVERALL: [score between 1 and 5]
+
+  The phrase `COMPLETION START:` marks the separator between the given beginning and the story completion. Everything before `COMPLETION START:` is the original story prompt, and everything after `COMPLETION START:` is the completion you need to evaluate.
+
+  <story>
+  STORY START:
+  {story_start}
+  COMPLETION START:
+  {completion}
+  </story>
+
+  First, evaluate the story completion with a balanced perspective, acknowledging both overall strengths and areas for improvement.
+
+  For each category (Grammar, Coherence, Creativity, Consistency, and Plot), identify one strength and one area for improvement before providing your correctly formatted score for that category.
+
+  Remember to apply the automatic score caps for serious issues as described in the instructions.
+
+  Don't forget to give your correctly formatted final overall score.
+
+# Follow-up prompt
+followup_prompt: |
+  You either forgot to provide a score for one of the categories, provided a score that is not between 1 and 5, provided a score in the incorrect format, or ran out of tokens before providing the scores.
+
+  Do not output any new reasoning. Just provide the scores.
+
+  AGE: [A, B, C, D, E, or F]
+  GRAMMAR: [score between 1 and 5]
+  COHERENCE: [score between 1 and 5]
+  CREATIVITY: [score between 1 and 5]
+  CONSISTENCY: [score between 1 and 5]
+  PLOT: [score between 1 and 5]
+  OVERALL: [score between 1 and 5]

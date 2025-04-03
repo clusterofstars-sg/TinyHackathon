@@ -166,7 +166,8 @@ def upload_submission(
             )
 
     # Generate timestamp for the submission
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now()
+    timestamp = timestamp.replace(tzinfo=timezone.utc).astimezone(aoe_timezone).strftime("%Y%m%d_%H%M%S")
 
     # Use temporary directory instead of local directory
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -275,7 +276,7 @@ def whoami():
         elif role == "write":
             console.print(f"[green]Logged in as [blue]{info['name']}[/blue] with write access.[/green]")
         else:
-            raise ValueError(f"Unknown Hugging Face role: {info['name']}")
+            raise ValueError(f"Unknown Hugging Face role for user: {info['name']}")
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
 

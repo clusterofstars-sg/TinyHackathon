@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+
+{% block title %}Log: {{ log_file }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/">Home</a></li>
+        <li class="breadcrumb-item"><a href="/logs/{{ username }}">{{ username }}</a></li>
+        <li class="breadcrumb-item active" aria-current="page">{{ log_file }}</li>
+    </ol>
+</nav>
+
+<div class="row">
+    <div class="col-md-12">
+        <h1>Log: {{ log_file }}</h1>
+
+        <!-- Story comparison selector -->
+        {% if story_ids and story_ids|length > 0 %}
+        <div class="card mb-4">
+            <div class="card-header bg-info text-white">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">Compare Stories</h5>
+                    <div class="btn-group sort-controls">
+                        <a href="/logs/{{ username }}/{{ log_file }}?sort=id"
+                            class="btn btn-sm btn-{% if current_sort == 'id' %}light{% else %}outline-light{% endif %}">Sort
+                            by ID</a>
+                        <a href="/logs/{{ username }}/{{ log_file }}?sort=score_high"
+                            class="btn btn-sm btn-{% if current_sort == 'score_high' %}light{% else %}outline-light{% endif %}">Highest
+                            Score First</a>
+                        <a href="/logs/{{ username }}/{{ log_file }}?sort=score_low"
+                            class="btn btn-sm btn-{% if current_sort == 'score_low' %}light{% else %}outline-light{% endif %}">Lowest
+                            Score First</a>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <p class="mb-2">Select a story to compare across all models:</p>
+                <div class="d-flex flex-wrap gap-1">
+                    {% for story_id in story_ids %}
+                    <a href="/compare/{{ username }}/{{ log_file }}/{{ story_id }}"
+                        class="btn btn-outline-primary py-1 px-2 mb-1 story-btn-with-score"
+                        style="font-size: 0.8rem; min-width: 40px;"
+                        title="Overall Score: {{ avg_scores.get(story_id, 'N/A')|round(1) if story_id in avg_scores else 'N/A' }}">
+                        <span>#{{ story_id }}</span>
+                        {% if story_id in avg_scores %}
+                        <span class="badge bg-primary">{{ avg_scores[story_id]|round(1) }}</span>
+                        {% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="accordion" id="modelsAccordion">
+            {% for model_name, model_info in model_data.items() %}
+            <div class="accordion-item mb-3">
+                <h2 class="accordion-header">
+                    <button class="accordion-button {% if not loop.first %}collapsed{% endif %}" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#model{{ model_info.model_index }}"
+                        aria-expanded="{% if loop.first %}true{% else %}false{% endif %}"
+                        aria-controls="model{{ model_info.model_index }}">
+                        <strong>{{ model_name }}</strong>
+                    </button>
+                </h2>
+                <div id="model{{ model_info.model_index }}"
+                    class="accordion-collapse collapse {% if loop.first %}show{% endif %}"
+                    data-bs-parent="#modelsAccordion">
+                    <div class="accordion-body">
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <strong>Timestamp:</strong> {{ model_info.timestamp }}
+                            </div>
+                            <div class="col-md-4">
+                                <strong>Username:</strong> {{ model_info.username }}
+                            </div>
+                            <div class="col-md-4">
+                                <strong>Submission ID:</strong> {{ model_info.submission_id }}
+                            </div>
+                        </div>
+
+                        <h4>Evaluations</h4>
+                        {% for evaluation in model_info.evaluations %}
+                        <div class="card evaluation-card mb-4">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <h5 class="mb-0">Evaluation #{{ evaluation.item_id }}</h5>
+                                <a href="/compare/{{ username }}/{{ log_file }}/{{ evaluation.item_id }}"
+                                    class="btn btn-sm btn-primary">
+                                    Compare with other models
+                                </a>
+                            </div>
+                            <div class="card-body">
+                                {% if evaluation.story %}
+                                <div class="card mb-4">
+                                    <div class="card-header bg-success text-white">
+                                        <h6 class="mb-0">Story</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="story-content"
+                                            style="background-color: #f8fff8; padding: 15px; border-radius: 5px;">
+                                            {{ evaluation.story | safe }}
+                                        </div>
+                                    </div>
+                                </div>
+                                {% endif %}
+
+                                {% if evaluation.scores %}
+                                <div class="scores mb-4">
+                                    <h6>Scores:</h6>
+                                    <div class="d-flex flex-wrap">
+                                        {% for score_name, score_value in evaluation.scores.items() %}
+                                        <span class="badge bg-primary score-badge">{{ score_name }}: {{ score_value
+                                            }}</span>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                                {% endif %}
+
+                                <div class="accordion"
+                                    id="evaluation{{ model_info.model_index }}_{{ evaluation.item_id }}">
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header">
+                                            <button class="accordion-button collapsed" type="button"
+                                                data-bs-toggle="collapse"
+                                                data-bs-target="#response{{ model_info.model_index }}_{{ evaluation.item_id }}"
+                                                aria-expanded="false">
+                                                Response
+                                            </button>
+                                        </h2>
+                                        <div id="response{{ model_info.model_index }}_{{ evaluation.item_id }}"
+                                            class="accordion-collapse collapse">
+                                            <div class="accordion-body">
+                                                <pre>{{ evaluation.response }}</pre>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header">
+                                            <button class="accordion-button collapsed" type="button"
+                                                data-bs-toggle="collapse"
+                                                data-bs-target="#prompt{{ model_info.model_index }}_{{ evaluation.item_id }}"
+                                                aria-expanded="false">
+                                                Prompt
+                                            </button>
+                                        </h2>
+                                        <div id="prompt{{ model_info.model_index }}_{{ evaluation.item_id }}"
+                                            class="accordion-collapse collapse">
+                                            <div class="accordion-body">
+                                                <pre>{{ evaluation.prompt }}</pre>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {% if evaluation.has_followup_prompt %}
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header">
+                                            <button class="accordion-button collapsed" type="button"
+                                                data-bs-toggle="collapse"
+                                                data-bs-target="#followupPrompt{{ model_info.model_index }}_{{ evaluation.item_id }}"
+                                                aria-expanded="false">
+                                                Followup Prompt
+                                            </button>
+                                        </h2>
+                                        <div id="followupPrompt{{ model_info.model_index }}_{{ evaluation.item_id }}"
+                                            class="accordion-collapse collapse">
+                                            <div class="accordion-body">
+                                                <pre>{{ evaluation.followup_prompt }}</pre>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% endif %}
+
+                                    {% if evaluation.followup_response %}
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header">
+                                            <button class="accordion-button collapsed" type="button"
+                                                data-bs-toggle="collapse"
+                                                data-bs-target="#followupResponse{{ model_info.model_index }}_{{ evaluation.item_id }}"
+                                                aria-expanded="false">
+                                                Followup Response
+                                            </button>
+                                        </h2>
+                                        <div id="followupResponse{{ model_info.model_index }}_{{ evaluation.item_id }}"
+                                            class="accordion-collapse collapse">
+                                            <div class="accordion-body">
+                                                <pre>{{ evaluation.followup_response }}</pre>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% endif %}
+
+                                    {% if evaluation.metadata %}
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header">
+                                            <button class="accordion-button collapsed" type="button"
+                                                data-bs-toggle="collapse"
+                                                data-bs-target="#metadata{{ model_info.model_index }}_{{ evaluation.item_id }}"
+                                                aria-expanded="false">
+                                                Metadata
+                                            </button>
+                                        </h2>
+                                        <div id="metadata{{ model_info.model_index }}_{{ evaluation.item_id }}"
+                                            class="accordion-collapse collapse">
+                                            <div class="accordion-body">
+                                                <pre>{{ evaluation.metadata | tojson(indent=2) }}</pre>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}

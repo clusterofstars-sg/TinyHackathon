@@ -1,35 +1,23 @@
-import csv
-import datetime
 import json
 import re
 import time
 import traceback
-from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import torch
 import transformers
-import typer
 import yaml
 from exllamav2 import ExLlamaV2, ExLlamaV2Cache, ExLlamaV2Config, ExLlamaV2Tokenizer
 from exllamav2.generator import ExLlamaV2DynamicGenerator, ExLlamaV2DynamicJob, ExLlamaV2Sampler
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
-from rich.table import Table
-from submission import get_hf_user
 
-app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
+# Import from scoring only what we need
+from tinyhackathon.scoring import extract_scores, extract_submission_datetime, process_scores
+
 console = Console()
-
-
-class ScoreCategory(str, Enum):
-    GRAMMAR = "GRAMMAR"
-    CREATIVITY = "CREATIVITY"
-    CONSISTENCY = "CONSISTENCY"
-    PLOT = "PLOT"
-    OVERALL = "OVERALL"
 
 
 def load_submissions(submissions_dir: Union[str, Path]) -> List[Path]:
@@ -43,26 +31,51 @@ def load_submissions(submissions_dir: Union[str, Path]) -> List[Path]:
 
 
 def create_evaluation_prompt(
-    story_start: str, completion: str, prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml", previous_response: Optional[str] = None
+    story_start: str,
+    completion: str,
+    prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml",
+    previous_response: Optional[str] = None,
+    reasoning_template: Optional[str] = None,
 ):
     "Create a structured prompt for evaluating story completions from a YAML file, with optional follow-up"
     prompt_file = Path(prompt_file) if not isinstance(prompt_file, Path) else prompt_file
 
     if not prompt_file.exists():
-        console.print(f"[red]Prompt file {prompt_file} not found, using default prompts[/red]")
-        typer.Exit(1)
-    else:
-        # Load prompts from YAML file
-        try:
-            with open(prompt_file, "r") as f:
-                prompts = yaml.safe_load(f)
+        console.print(f"[red]Prompt file {prompt_file} not found[/red]")
+        raise ValueError(f"Prompt file {prompt_file} not found. Please provide a valid prompt file.")
 
-            system_prompt = prompts.get("system_prompt", "")
-            user_prompt = prompts.get("user_prompt", "")
-            followup_prompt = prompts.get("followup_prompt", "")
+    # Load prompts from YAML file
+    try:
+        with open(prompt_file, "r") as f:
+            prompts = yaml.safe_load(f)
+    except Exception as e:
+        console.print(f"[red]Error loading prompts from {prompt_file}: {str(e)}[/red]")
+        raise
+
+    system_prompt = prompts.get("system_prompt", "")
+    user_prompt = prompts.get("user_prompt", "")
+    followup_prompt = prompts.get("followup_prompt", "")
+
+    # If reasoning template is provided and the system prompt has the placeholder
+    if reasoning_template and "{reasoning_prompt}" in system_prompt:
+        try:
+            # Use specified reasoning template
+            reasoning_file = Path(reasoning_template)
+
+            if not reasoning_file.exists():
+                console.print(f"[red]Reasoning template file {reasoning_file} not found[/red]")
+                raise ValueError(f"Reasoning template file {reasoning_file} not found")
+
+            with open(reasoning_file, "r") as f:
+                reasoning_template_data = yaml.safe_load(f)
+
+            reasoning_prompt = reasoning_template_data.get("reasoning_prompt", "")
+
+            # Format the system prompt with the reasoning prompt
+            system_prompt = system_prompt.format(reasoning_prompt=reasoning_prompt)
         except Exception as e:
-            console.print(f"[red]Error loading prompts from {prompt_file}: {str(e)}[/red]")
-            raise
+            console.print(f"[red]Error applying reasoning template: {str(e)}[/red]")
+            # Continue with the original system prompt if there's an error
 
     # Format the user prompt with provided values
     user_prompt = user_prompt.format(story_start=story_start, completion=completion)
@@ -86,29 +99,99 @@ def create_evaluation_prompt(
     return messages
 
 
+def load_model(
+    model_dir: str,
+    cache_size: int = 1024 * 50,
+    draft_model_dir: Optional[str] = None,
+    draft_cache_size: Optional[int] = None,
+) -> Tuple[ExLlamaV2DynamicGenerator, str]:
+    """Load an ExLlama2 model and return the generator and model architecture.
+
+    Args:
+        model_dir: Directory containing the model files
+        cache_size: Cache size in tokens
+        draft_model_dir: Directory containing the draft model files
+        draft_cache_size: Draft cache size in tokens
+
+    Returns:
+        Tuple of (generator, model_architecture)
+    """
+    console.print(f"[yellow]Loading model from {model_dir}...[/yellow]")
+    config = ExLlamaV2Config(model_dir)
+    model = ExLlamaV2(config)
+    cache = ExLlamaV2Cache(model, max_seq_len=cache_size, lazy=True)
+    model.load_autosplit(cache)
+    tokenizer = ExLlamaV2Tokenizer(config)
+
+    # Get HF tokenizer for chat template
+    hf_tokenizer = transformers.AutoTokenizer.from_pretrained(model_dir)
+    tokenizer.apply_chat_template = hf_tokenizer.apply_chat_template
+
+    if draft_model_dir is not None:
+        console.print(f"[yellow]Loading draft model from {draft_model_dir}...[/yellow]")
+        draft_config = ExLlamaV2Config(draft_model_dir)
+        draft_model = ExLlamaV2(draft_config)
+        draft_cache = ExLlamaV2Cache(draft_model, max_seq_len=draft_cache_size, lazy=True)
+        draft_model.load_autosplit(draft_cache)
+    else:
+        draft_model = None
+        draft_cache = None
+
+    generator = ExLlamaV2DynamicGenerator(
+        model=model,
+        cache=cache,
+        tokenizer=tokenizer,
+        max_batch_size=None,
+        draft_model=draft_model,
+        draft_cache=draft_cache,
+    )
+    generator.warmup()
+
+    # Return the generator and model architecture
+    return generator, config.architecture
+
+
 def process_submission(
     submission_file: Path,
     generator: ExLlamaV2DynamicGenerator,
-    scores: Dict[str, Any],
-    output_file: Path,
+    model_arch: str,
     temperature: float = 0.1,
     top_p: float = 0.9,
     max_new_tokens: int = 20,
     sample: Optional[int] = None,
     log_prompts: bool = False,
-    prompt_file: Union[str, Path] = "prompts.yaml",
-):
-    "Process a single submission file and evaluate its completions."
+    prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml",
+    parent_progress: Optional["Progress"] = None,
+    reasoning_template: Optional[str] = None,
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """Process a single submission file and evaluate its completions.
+
+    Args:
+        submission_file: Path to the submission CSV file
+        generator: ExLlama2 generator instance
+        model_arch: Model architecture name
+        temperature: Temperature for generation sampling
+        top_p: Top-p (nucleus) sampling value
+        max_new_tokens: Maximum number of tokens to generate
+        sample: Optional limit to process only the first N items
+        log_prompts: Whether to log prompts and responses
+        prompt_file: Path to YAML file with evaluation prompts
+        parent_progress: Optional parent Progress instance to use instead of creating a new one
+        reasoning_template: Optional reasoning template to apply
+
+    Returns:
+        Dictionary containing scores data
+    """
     username = submission_file.parent.name
     submission_id = submission_file.stem
-    model_arch = generator.model.config.architecture
-    if username in scores and submission_id in scores[username] and model_arch in scores[username][submission_id]:
-        console.print(f"[blue]Skipping already evaluated submission: {username}/{submission_id}/{model_arch}[/blue]")
-        return scores
 
     console.print(f"[yellow]Evaluating submission: {username}/{submission_id}[/yellow]")
+    scores = {username: {submission_id: {model_arch: {"score": 0, "details": []}}}}
 
     try:
+        # Start timing
+        start_time = time.time()
+
         df = pd.read_csv(submission_file)
         prompts = df["prompt"].tolist()
         completions = df["completion"].tolist()
@@ -117,17 +200,8 @@ def process_submission(
             prompts = prompts[:sample]
             completions = completions[:sample]
 
-        if username not in scores:
-            scores[username] = {}
-
-        if submission_id not in scores[username]:
-            scores[username][submission_id] = {}
-
-        if model_arch not in scores[username][submission_id]:
-            scores[username][submission_id][model_arch] = {
-                "score": 0,
-                "details": [],
-            }
+        total_items = len(prompts)
+        console.print(f"[blue]Found {total_items} items to evaluate in {username}/{submission_id}[/blue]")
 
         # Create log file path if logging is enabled
         log_file = None
@@ -137,8 +211,37 @@ def process_submission(
             log_file = log_dir / f"{submission_id}.json"
             console.print(f"[yellow]Will log prompts and responses to {log_file}[/yellow]")
 
-        scores = eval_completions(prompts, completions, generator, username, submission_id, scores, output_file, temperature, top_p, max_new_tokens, sample=sample, log_file=log_file, prompt_file=prompt_file)  # fmt: skip
-        console.print(f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id][model_arch]['score']:.2f}[/green]")  # fmt: skip
+        # Run evaluation
+        scores = eval_completions(
+            prompts,
+            completions,
+            generator,
+            model_arch,
+            username,
+            submission_id,
+            scores,
+            temperature,
+            top_p,
+            max_new_tokens,
+            sample=sample,
+            log_file=log_file,
+            prompt_file=prompt_file,
+            parent_progress=parent_progress,
+            reasoning_template=reasoning_template,
+        )
+
+        # Compute average time per item for reporting
+        elapsed_time = time.time() - start_time
+        avg_time_per_item = elapsed_time / total_items if total_items > 0 else 0
+        items_per_second = total_items / elapsed_time if elapsed_time > 0 else 0
+
+        # Report detailed stats
+        console.print(
+            f"[green]Completed evaluation for {username}/{submission_id} with score: {scores[username][submission_id][model_arch]['score']:.2f}[/green]"
+        )
+        console.print(
+            f"[blue]Stats: {total_items} items in {elapsed_time:.2f}s ({avg_time_per_item:.2f}s per item, {items_per_second:.2f} items/s)[/blue]\n"
+        )
 
     except Exception as e:
         console.print(f"[red]Error processing {username}/{submission_id}: {str(e)}[/red]")
@@ -147,117 +250,11 @@ def process_submission(
     return scores
 
 
-def evaluate_submissions(
-    model_dir: str,
-    output_file: str = "scores.json",
-    submissions_dir: str = "downloaded_submissions",
-    temperature: float = 0.1,
-    top_p: float = 0.9,
-    max_new_tokens: int = 20,
-    batch_size: int = 128,
-    cache_size: int = 1024 * 50,
-    sample: Optional[int] = None,
-    log_prompts: bool = False,
-    prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml",
-):
-    "Evaluate all submissions using ExLlama2."
-    submission_files = load_submissions(submissions_dir)
-    console.print(f"[yellow]Loading model from {model_dir}...[/yellow]")
-    config = ExLlamaV2Config(model_dir)
-    model = ExLlamaV2(config)
-    cache = ExLlamaV2Cache(model, max_seq_len=cache_size, lazy=True)
-    model.load_autosplit(cache)
-    tokenizer = ExLlamaV2Tokenizer(config)
-    hf_tokenizer = transformers.AutoTokenizer.from_pretrained(model_dir)
-    tokenizer.apply_chat_template = hf_tokenizer.apply_chat_template
-    generator = ExLlamaV2DynamicGenerator(model=model, cache=cache, tokenizer=tokenizer, max_batch_size=batch_size)
-    generator.warmup()
-    output_file = Path(output_file)
-    scores: Dict[str, Dict[str, Dict[str, Any]]] = {}
-    if output_file.exists():
-        scores = read_csv(output_file)
-
-    for submission_file in submission_files:
-        scores = process_submission(
-            submission_file,
-            generator,
-            scores,
-            output_file,
-            temperature,
-            top_p,
-            max_new_tokens,
-            sample=sample,
-            log_prompts=log_prompts,
-            prompt_file=prompt_file,
-        )
-
-    leaderboard = []
-    for username, user_submissions in scores.items():
-        (best_score, avg_idv_score, avg_consistency_score) = calc_scores(user_submissions)
-        leaderboard.append(
-            {
-                "username": username,
-                "score": best_score,
-                "average_individual_score": avg_idv_score,
-                "average_consistency_score": avg_consistency_score,
-            }
-        )
-
-    leaderboard.sort(key=lambda x: x["score"], reverse=True)
-    return scores, leaderboard
-
-
-def calc_scores(user_submissions):
-    "Calculate scores for single user"
-    idv_headers = ["grammar", "creativity", "consistency", "plot"]
-    avg_scores = []
-    avg_idv_scores = []
-    avg_consistency_scores = []
-    for submission in user_submissions.values():
-        model_scores = [model_arch["score"] for model_arch in submission.values()]
-        avg_scores += [sum(model_scores) / len(model_scores)]
-        item_scores = [model_arch["details"] for model_arch in submission.values()]
-        item_scores = sum(item_scores, [])  # concat arrays for all models
-
-        def filter_by_header(scores: Dict[str, float]):
-            return [scores[header] for header in idv_headers if header in scores]
-
-        def mean(scores: Dict[str, float]):
-            return sum(filter_by_header(scores)) / len(filter_by_header(scores))
-
-        idv_avg_scores = [mean(item["scores"]) for item in item_scores]
-        avg_idv_scores += [sum(idv_avg_scores) / len(idv_avg_scores)]
-        consistency_scores = [model_arch["details"] for model_arch in submission.values()]
-        consistency_scores = sum(consistency_scores, [])  # concat arrays for all models
-        consistency_scores = [item["scores"]["consistency"] for item in consistency_scores]
-        avg_consistency_scores += [sum(consistency_scores) / len(consistency_scores)]
-    max_score = max(avg_scores)
-    max_index = avg_scores.index(max_score)
-    max_idv_score = avg_idv_scores[max_index]
-    max_consistency_score = avg_consistency_scores[max_index]
-    return (max_score, max_idv_score, max_consistency_score)
-
-
-def extract_scores(response):
-    "Extract scores from the model's response"
-    scores = {}
-    # Extract individual category scores
-    for category in ScoreCategory:
-        pattern = f"{category.value}: (\\d+(?:\\.\\d+)?)"
-        # Find all matches and use the last one if multiple exist
-        matches = re.findall(pattern, response, re.IGNORECASE)
-        if matches:
-            scores[category.lower()] = float(matches[-1])
-
-    # Check if all required categories have scores
-    success = all(category.lower() in scores for category in ScoreCategory)
-    return scores, success
-
-
 def run_batch_evaluation(
     generator: ExLlamaV2DynamicGenerator,
     jobs_data: List[Dict[str, Any]],
     description: str,
+    parent_progress: Optional["Progress"] = None,
 ) -> Dict[int, Dict[str, Any]]:
     """
     Run a batch of evaluation jobs through the generator.
@@ -266,6 +263,7 @@ def run_batch_evaluation(
         generator: The ExLlamaV2DynamicGenerator instance
         jobs_data: List of dicts containing job data with keys 'prompt_ids' and 'identifier'
         description: Description for the progress bar
+        parent_progress: Optional parent Progress instance to use instead of creating a new one
 
     Returns:
         Dictionary mapping identifiers to dicts with 'response' and 'metadata'
@@ -288,19 +286,12 @@ def run_batch_evaluation(
     total_jobs = generator.num_remaining_jobs()
     time_begin = time.time()
 
-    # Generate all completions with progress bar
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
-        console=console,
-    ) as progress:
-        # Create the main progress task
-        task = progress.add_task(f"[green]{description}", total=total_jobs)
+    # Use either the provided progress or create a new one
+    if parent_progress is not None:
+        # Use the parent progress
+        progress = parent_progress
+        # Make sure to include the submissions_per_min field with a default value to avoid KeyError
+        task = progress.add_task(f"[green]{description}", total=total_jobs, submissions_per_min=0.0)
 
         while generator.num_remaining_jobs():
             try:
@@ -328,6 +319,49 @@ def run_batch_evaluation(
                 traceback.print_exc()
                 continue
 
+        # Remove the task when done since we don't want to close the parent progress
+        progress.remove_task(task)
+    else:
+        # Generate all completions with our own progress bar
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            # Create the main progress task
+            task = progress.add_task(f"[green]{description}", total=total_jobs)
+
+            while generator.num_remaining_jobs():
+                try:
+                    batch_results = generator.iterate()
+
+                    # Track tokens processed
+                    bsz = len(set([r["identifier"] for r in batch_results]))
+                    num_tokens += bsz
+
+                    for result in batch_results:
+                        idx = result["identifier"]
+
+                        if not result["eos"]:
+                            continue
+
+                        # For EOS results, get the full completion
+                        results[idx] = {"response": result["full_completion"], "metadata": result}
+                        num_completions += 1
+
+                        # Update progress
+                        progress.update(task, completed=num_completions)
+
+                except Exception as e:
+                    console.print(f"[red]Error in generator iteration: {str(e)}[/red]")
+                    traceback.print_exc()
+                    continue
+
     # Output statistics
     elapsed_time = time.time() - time_begin
     rpm = num_completions / (elapsed_time / 60) if elapsed_time > 0 else 0
@@ -344,23 +378,44 @@ def eval_completions(
     prompts: List[str],
     completions: List[str],
     generator: ExLlamaV2DynamicGenerator,
+    model_arch: str,
     username: str,
     submission_id: str,
     scores: Dict[str, Dict[str, Dict[str, Any]]],
-    output_file: Path,
-    temperature: float = 1.0,
+    temperature: float = 0.1,
     top_p: float = 0.9,
     max_new_tokens: int = 20,
     sample: Optional[int] = None,
     log_file: Optional[Path] = None,
     prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml",
-):
-    "Evaluate each completion in a submission using batch processing with re-prompting for missing scores."
+    parent_progress: Optional["Progress"] = None,
+    reasoning_template: Optional[str] = None,
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """Evaluate each completion in a submission using batch processing with re-prompting for missing scores.
+
+    Args:
+        prompts: List of story beginnings
+        completions: List of story completions to evaluate
+        generator: ExLlama2 generator instance
+        model_arch: Model architecture name
+        username: Username of the submission
+        submission_id: ID of the submission
+        scores: Dictionary to store scores
+        temperature: Temperature for generation sampling
+        top_p: Top-p (nucleus) sampling value
+        max_new_tokens: Maximum number of tokens to generate
+        sample: Optional limit to process only the first N items
+        log_file: Optional path to save logs
+        prompt_file: Path to YAML file with evaluation prompts
+        parent_progress: Optional parent Progress instance to use instead of creating a new one
+        reasoning_template: Optional reasoning template to apply
+
+    Returns:
+        Updated scores dictionary
+    """
     try:
         # Create sampler settings
         gen_settings = ExLlamaV2Sampler.Settings(temperature=temperature, top_p=top_p, token_repetition_penalty=1.0, top_k=0)
-
-        model_arch = generator.model.config.architecture
 
         # Reset generator queue if needed
         if generator.num_remaining_jobs() > 0:
@@ -374,7 +429,9 @@ def eval_completions(
         followup_prompts_log = {}
 
         for i, (beginning, completion) in enumerate(zip(prompts, completions)):
-            raw_prompt = create_evaluation_prompt(story_start=beginning, completion=completion, prompt_file=prompt_file)
+            raw_prompt = create_evaluation_prompt(
+                story_start=beginning, completion=completion, prompt_file=prompt_file, reasoning_template=reasoning_template
+            )
             templated_prompt = generator.tokenizer.apply_chat_template(raw_prompt, add_generation_prompt=True, tokenize=False)
 
             # Store prompt for logging
@@ -392,20 +449,17 @@ def eval_completions(
 
         # Run initial evaluation
         console.print("[yellow]Processing evaluation jobs...[/yellow]")
-        initial_results = run_batch_evaluation(generator, initial_jobs_data, f"Evaluating {username}/{submission_id}")
+        initial_results = run_batch_evaluation(
+            generator, initial_jobs_data, f"Evaluating {username}/{submission_id}", parent_progress=parent_progress
+        )
 
         # Process all responses and check for missing scores
         console.print("[yellow]Processing responses and calculating scores...[/yellow]")
 
-        # Initialize details list if needed
-        if "details" not in scores[username][submission_id][model_arch]:
-            scores[username][submission_id][model_arch]["details"] = []
-
-        # Prepare data structures
+        # Extract responses and check which need follow-up
         responses = {}
         followup_responses = {}
         metadata = {}
-        item_scores = {}
         items_needing_followup = set()
 
         # Extract responses and check which need follow-up
@@ -425,16 +479,12 @@ def eval_completions(
                     items_needing_followup.add(idx)
                     console.print(f"[yellow]Item {idx} missing scores, will re-prompt[/yellow]")
 
-                # Store scores (may be updated later if follow-up is needed)
-                item_scores[idx] = extracted_scores
-
             except Exception as e:
                 console.print(f"[red]Error extracting score from response for item {idx}: {str(e)}[/red]")
                 items_needing_followup.add(idx)
 
         # Handle follow-up prompts if needed
         follow_up_count = len(items_needing_followup)
-        success_count = 0
 
         if follow_up_count > 0:
             console.print(f"[yellow]Re-prompting {follow_up_count} items with missing scores...[/yellow]")
@@ -455,7 +505,11 @@ def eval_completions(
 
                 # Create follow-up prompt
                 raw_prompt = create_evaluation_prompt(
-                    story_start=beginning, completion=completion, prompt_file=prompt_file, previous_response=previous_response
+                    story_start=beginning,
+                    completion=completion,
+                    prompt_file=prompt_file,
+                    previous_response=previous_response,
+                    reasoning_template=reasoning_template,
                 )
 
                 templated_prompt = generator.tokenizer.apply_chat_template(raw_prompt, add_generation_prompt=True, tokenize=False)
@@ -489,7 +543,9 @@ def eval_completions(
 
             # Run follow-up evaluation
             console.print(f"[yellow]Processing {followup_count} follow-up evaluation jobs...[/yellow]")
-            followup_results = run_batch_evaluation(generator, followup_jobs_data, "Re-evaluating items with missing scores")
+            followup_results = run_batch_evaluation(
+                generator, followup_jobs_data, "Re-evaluating items with missing scores", parent_progress=parent_progress
+            )
 
             # Process follow-up responses
             console.print(f"[yellow]Processing {len(followup_results)} follow-up responses...[/yellow]")
@@ -501,46 +557,28 @@ def eval_completions(
                 # Store follow-up response separately
                 followup_responses[original_idx] = followup_response
 
-                try:
-                    extracted_scores, success = extract_scores(followup_response)
-
-                    for key, value in list(extracted_scores.items()):
-                        extracted_scores[key] = min(10, max(1, value))
-
-                    if success:
-                        success_count += 1
-                        # Update with successfully extracted scores
-                        item_scores[original_idx] = extracted_scores
-
-                except Exception as e:
-                    console.print(f"[red]Error extracting score from follow-up response for item {original_idx}: {str(e)}[/red]")
-
-            console.print(f"[green]Successfully retrieved scores for {success_count}/{follow_up_count} items after re-prompting[/green]")
-
-        # Update scores and prepare logs
-        total_score = 0
-        processed_count = 0
+        # Process all responses and extract scores
+        scores, item_scores, total_score, processed_count = process_scores(
+            responses,
+            followup_responses,
+            username,
+            submission_id,
+            model_arch,
+            scores,
+        )
 
         # Log prompts and responses if log_file is provided
         if log_file:
             log_data = {
-                "timestamp": datetime.datetime.now().isoformat(),
+                "timestamp": extract_submission_datetime(submission_id),
                 "username": username,
                 "submission_id": submission_id,
                 "evaluations": [],
             }
 
-        # Process each response and store final scores
-        for idx in range(len(prompts)):
-            if idx in item_scores:
-                # Store the score
-                details_item = {"item_id": idx, "scores": item_scores[idx]}
-                scores[username][submission_id][model_arch]["details"].append(details_item)
-                total_score += item_scores[idx].get("overall", 0)
-                processed_count += 1
-
-                # Add to log if enabled
-                if log_file:
+            # Add each evaluation to the log
+            for idx in range(len(prompts)):
+                if idx in item_scores:
                     log_item = {
                         "item_id": idx,
                         "prompt": prompts_log.get(idx, ""),
@@ -565,32 +603,34 @@ def eval_completions(
 
                     log_data["evaluations"].append(log_item)
 
-        # Save logs if enabled
-        if log_file and processed_count > 0:
             # Ensure log directory exists
             log_file.parent.mkdir(exist_ok=True, parents=True)
 
-            # Append to existing log if it exists
-            existing_logs = []
+            # Read existing logs organized by model
+            existing_logs = {}
             if log_file.exists():
                 try:
                     existing_logs = json.loads(log_file.read_text())
-                    if not isinstance(existing_logs, list):
-                        existing_logs = [existing_logs]
+                    if not isinstance(existing_logs, dict):
+                        existing_logs = {}
                 except:
-                    existing_logs = []
+                    existing_logs = {}
 
-            existing_logs.append(log_data)
+            # Create model_arch key if it doesn't exist and store log directly (overwrite)
+            model_key = model_arch.replace("/", "_")  # Ensure safe key name
+            existing_logs[model_key] = log_data  # Overwrite instead of append to a list
+
+            # Write updated logs back to file
             log_file.write_text(json.dumps(existing_logs, indent=2))
-            console.print(f"[green]Saved prompt and response logs to {log_file}[/green]")
+            console.print(f"[green]Saved prompt and response logs for model {model_arch} to {log_file}[/green]")
 
         # Final update
         if processed_count > 0:
-            avg_score = total_score / processed_count
-            scores[username][submission_id][model_arch]["score"] = avg_score
-            write_csv(output_file, scores)
-            console.print(f"[green]Completed processing {processed_count} responses with final avg score: {avg_score:.2f}[/green]")
+            console.print(
+                f"[green]Completed processing {processed_count} responses with final avg score: {scores[username][submission_id][model_arch]['score']:.2f}[/green]"
+            )
             if follow_up_count > 0:
+                success_count = len([idx for idx in items_needing_followup if idx in item_scores])
                 console.print(f"[blue]Re-prompted {follow_up_count} items, successfully retrieved scores for {success_count} items[/blue]")
 
     except Exception as e:
@@ -600,197 +640,121 @@ def eval_completions(
     return scores
 
 
-def write_csv(path: Path, scores: Dict[str, Dict[str, Dict[str, Any]]]):
-    header = ["username", "submission_id", "model_arch", "score", "item_id", "grammar", "creativity", "consistency", "plot", "overall"]
-    with open(path.as_posix(), "w", newline="") as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(header)
-        for user in scores:
-            for submission in scores[user]:
-                for model_arch in scores[user][submission]:
-                    score = scores[user][submission][model_arch]["score"]
-                    for item in scores[user][submission][model_arch]["details"]:
-                        ind_scores = [(item["scores"][h] if h in item["scores"] else "#") for h in header[5:]]
-                        writer.writerow([user, submission, model_arch, score, item["item_id"], *ind_scores])
+def score_submission(
+    submission_file: Union[Path, List[Path]],
+    model_dir: str,
+    temperature: float = 0.1,
+    top_p: float = 0.9,
+    max_new_tokens: int = 20,
+    cache_size: int = 1024 * 60,
+    log_prompts: bool = False,
+    prompt_file: Union[str, Path] = "prompts/simple_prompt.yaml",
+    generator: Optional[ExLlamaV2DynamicGenerator] = None,
+    model_arch: Optional[str] = None,
+    sample: Optional[int] = None,
+    draft_model_dir: Optional[str] = None,
+    draft_cache_size: Optional[int] = None,
+    reasoning_template: Optional[str] = None,
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """Score one or more submissions using the specified model.
 
+    Args:
+        submission_file: Path to submission CSV or list of submission CSV paths
+        model_dir: Directory containing model files
+        temperature: Temperature for generation
+        top_p: Top-p sampling value
+        max_new_tokens: Maximum tokens to generate
+        cache_size: Cache size in tokens
+        log_prompts: Whether to log prompts and responses
+        prompt_file: Path to prompt file
+        generator: Optional pre-loaded generator to reuse
+        model_arch: Optional model architecture name if generator is provided
+        sample: Optional number of samples to score per submission
+        draft_model_dir: Directory containing the draft model files
+        draft_cache_size: Draft cache size in tokens
+        reasoning_template: Optional reasoning template to apply
 
-def read_csv(path: str):
-    with open(path, "r") as file:
-        reader = csv.reader(file)
-        header = next(reader)
-        scores = {}
-        for item in reader:
-            (
-                user,
-                submission,
-                model_arch,
-                score,
-            ) = item[0], item[1], item[2], item[3]
-            if user not in scores:
-                scores[user] = {}
-            if submission not in scores[user]:
-                scores[user][submission] = {}
-            if model_arch not in scores[user][submission]:
-                scores[user][submission][model_arch] = {
-                    "score": float(score),
-                }
-            item_id = item[4]
-            ind_scores = {h: float(r) for h, r in zip(header[5:], item[5:]) if r != "#"}
-            if "details" not in scores[user][submission][model_arch]:
-                scores[user][submission][model_arch]["details"] = []
-            scores[user][submission][model_arch]["details"] += [{header[4]: int(item_id), "scores": ind_scores}]
-    return scores
-
-
-@app.command()
-def evaluate(
-    model_dir: Annotated[str, typer.Argument(help="Directory containing the ExLlama2 model files")],
-    output_file: Annotated[str, typer.Option(help="Path to save scores JSON")] = "scores.csv",
-    submissions_dir: Annotated[str, typer.Option(help="Directory containing submission files")] = "downloaded_submissions",
-    temperature: Annotated[float, typer.Option(help="Temperature for generation sampling")] = 1.0,
-    top_p: Annotated[float, typer.Option(help="Top-p (nucleus) sampling value")] = 0.9,
-    max_new_tokens: Annotated[int, typer.Option(help="Maximum number of tokens to generate")] = 20,
-    batch_size: Annotated[int, typer.Option(help="Maximum batch size for inference")] = 128,
-    cache_size: Annotated[int, typer.Option(help="Cache size in tokens (multiply by 4 for bytes)")] = 2048,
-    sample: Annotated[int, typer.Option(help="Sample the first N completions and test data")] = None,
-    log_prompts: Annotated[bool, typer.Option(help="Enable prompt and response logging")] = False,
-    prompt_file: Annotated[str, typer.Option(help="Path to YAML file with evaluation prompts")] = "prompts/simple_prompt.yaml",
-):
-    "Evaluate submissions using ExLlama2 and display a leaderboard."
-    try:
-        console.print(f"[yellow]Starting evaluation with batch_size={batch_size}, cache_size={cache_size}[/yellow]")
-        scores, leaderboard = evaluate_submissions(
-            model_dir=model_dir,
-            output_file=output_file,
-            submissions_dir=submissions_dir,
-            temperature=temperature,
-            top_p=top_p,
-            max_new_tokens=max_new_tokens,
-            batch_size=batch_size,
-            cache_size=cache_size,
-            sample=sample,
-            log_prompts=log_prompts,
-            prompt_file=prompt_file,
-        )
-
-        # Display leaderboard
-        console.print("[green]Evaluation complete! Leaderboard:[/green]")
-
-        table = Table(show_header=True)
-        table.add_column("Rank")
-        table.add_column("Username")
-        table.add_column("Score")
-        table.add_column("Avg. Individual Score")
-        table.add_column("Avg. Consistency Score")
-
-        for i, entry in enumerate(leaderboard[:10]):
-            table.add_row(
-                str(i + 1),
-                entry["username"],
-                f"{entry['score']:.2f}",
-                f"{entry['average_individual_score']:.2f}",
-                f"{entry['average_consistency_score']:.2f}",
-            )
-
-        console.print(table)
-        console.print(f"[blue]Full results saved to {output_file}[/blue]")
-        if log_prompts:
-            console.print("[blue]Prompt and response logs saved to logs/[username]/[submission_id].json[/blue]")
-
-    except Exception as e:
-        console.print(f"[red]Error: {str(e)}[/red]")
-        console.print(traceback.format_exc())
-
-
-def download_new_submissions(
-    dataset_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions", output_dir: Union[str, Path] = "downloaded_submissions"
-) -> List[Dict[str, Any]]:
-    "Download all new submissions from HF dataset."
-    # Get HF API
-    _, api = get_hf_user()
-
-    # Create output directory
-    output_dir = Path(output_dir)
-    output_dir.mkdir(exist_ok=True, parents=True)
-
-    # Create tracking file for processed submissions
-    processed_file = output_dir / "processed.json"
-    if processed_file.exists():
-        processed = set(json.loads(processed_file.read_text()))
+    Returns:
+        Dictionary with scores for all processed submissions
+    """
+    # Only load the model if neither generator nor model_arch is provided
+    if generator is None and model_arch is None:
+        generator, model_arch = load_model(model_dir, cache_size, draft_model_dir, draft_cache_size)
+        console.print(f"[green]Loaded model {model_arch} successfully[/green]\n")
+    # Handle case where one is provided but not the other
+    elif generator is None:
+        console.print(f"[yellow]Loading model (architecture {model_arch} specified but generator missing)...[/yellow]")
+        generator, _ = load_model(model_dir, cache_size, draft_model_dir, draft_cache_size)
+        console.print("[green]Loaded model successfully[/green]")
+    elif model_arch is None:
+        console.print("[yellow]Warning: Using provided generator but model architecture name unknown[/yellow]")
+        model_arch = "unknown"
     else:
-        processed = set()
+        console.print(f"[green]Using pre-loaded model {model_arch}[/green]")
 
-    # Get all files in the dataset that match our pattern
-    files = api.list_repo_files(repo_id=dataset_id, repo_type="dataset")
-    submission_files = [f for f in files if f.startswith("submissions/") and f.endswith(".csv")]
+    # Prepare a list of submissions to process
+    if isinstance(submission_file, list):
+        submission_files = submission_file
+    else:
+        submission_files = [submission_file]
 
-    # Download new submissions
-    new_files = []
-    for remote_path in submission_files:
-        if remote_path in processed:
-            continue
+    # Initialize combined scores dictionary
+    all_scores = {}
 
-        # Extract username and filename
-        parts = remote_path.split("/")
-        if len(parts) != 3:
-            continue  # Skip unexpected formats
+    # Process each submission with progress tracking
+    start_time = time.time()
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        TextColumn("[cyan]{task.fields[submissions_per_min]:.2f} submissions/min"),
+        console=console,
+    ) as progress:
+        task = progress.add_task(f"[green]Scoring submissions with {model_arch}", total=len(submission_files), submissions_per_min=0.0)
 
-        username = parts[1]
-        filename = parts[2]
+        for i, csv_path in enumerate(submission_files):
+            # Update description with current submission
+            progress.update(task, description=f"[green]Scoring submission {i + 1}/{len(submission_files)}: {csv_path.name}")
 
-        # Create user directory
-        user_dir = output_dir / username
-        user_dir.mkdir(exist_ok=True)
+            try:
+                # Process the submission
+                scores = process_submission(
+                    submission_file=csv_path,
+                    generator=generator,
+                    model_arch=model_arch,
+                    temperature=temperature,
+                    top_p=top_p,
+                    max_new_tokens=max_new_tokens,
+                    sample=sample,  # Pass the sample limit
+                    log_prompts=log_prompts,
+                    prompt_file=prompt_file,
+                    parent_progress=progress,  # Pass the progress object
+                    reasoning_template=reasoning_template,
+                )
 
-        # Download file
-        local_path = user_dir / filename
-        console.print(f"Downloading [yellow]{remote_path}[/yellow] to [blue]{local_path}[/blue]")
+                # Merge with combined scores
+                for username in scores:
+                    if username not in all_scores:
+                        all_scores[username] = {}
 
-        # Download to the correct path
-        downloaded_path = api.hf_hub_download(repo_id=dataset_id, repo_type="dataset", filename=remote_path, local_dir=output_dir)
+                    for submission_id in scores[username]:
+                        all_scores[username][submission_id] = scores[username][submission_id]
 
-        # Move file to the correct location if needed
-        if Path(downloaded_path) != local_path:
-            Path(downloaded_path).rename(local_path)
+                # Update progress
+                elapsed = time.time() - start_time
+                submissions_per_min = (i + 1) / (elapsed / 60) if elapsed > 0 else 0
+                progress.update(task, advance=1, submissions_per_min=submissions_per_min)
 
-        # Add to processed list
-        processed.add(remote_path)
-        new_files.append(dict(username=username, filename=filename, remote_path=remote_path, local_path=local_path))
+            except Exception as e:
+                console.print(f"[red]Error processing {csv_path}: {str(e)}[/red]")
+                traceback.print_exc()
+                # Still advance the progress bar even on error
+                progress.update(task, advance=1)
+                continue
 
-    # Update processed file
-    processed_file.write_text(json.dumps(list(processed)))
-
-    return new_files
-
-
-@app.command()
-def download_submissions(
-    output_dir: Annotated[str, typer.Option(help="Directory to store downloaded submissions")] = "downloaded_submissions",
-):
-    "Download all new submissions from the TinyStories hackathon."
-    try:
-        console.print("[yellow]Downloading new submissions...[/yellow]")
-        new_files = download_new_submissions(output_dir=output_dir)
-
-        if not new_files:
-            console.print("[green]No new submissions found.[/green]")
-            return
-
-        console.print(f"[green]Downloaded {len(new_files)} new submissions:[/green]")
-
-        table = Table(show_header=True)
-        table.add_column("Username")
-        table.add_column("Filename")
-        table.add_column("Local Path")
-
-        for file in new_files:
-            table.add_row(file["username"], file["filename"], str(file["local_path"]))
-
-        console.print(table)
-
-    except Exception as e:
-        console.print(f"[red]Error: {str(e)}[/red]")
-
-
-if __name__ == "__main__":
-    app()
+    console.print(f"[green]Completed scoring {len(submission_files)} submissions in {time.time() - start_time:.2f} seconds[/green]")
+    return all_scores

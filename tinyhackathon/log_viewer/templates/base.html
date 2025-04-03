@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Log Viewer{% endblock %}</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .card {
+            margin-bottom: 20px;
+        }
+
+        .evaluation-card {
+            margin-bottom: 30px;
+            border-left: 4px solid #007bff;
+        }
+
+        .score-badge {
+            font-size: 1.2em;
+            margin-right: 10px;
+        }
+
+        pre {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .nav-link {
+            padding: .5rem 1rem;
+        }
+
+        .breadcrumb {
+            padding: 10px 0;
+            margin-bottom: 20px;
+        }
+
+        .story-content {
+            font-family: 'Georgia', serif;
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .story-content p {
+            margin-bottom: 1em;
+        }
+
+        .story-content span.separator {
+            display: inline-block;
+            margin: 0 5px;
+        }
+
+        .accordion-button:not(.collapsed) {
+            background-color: #e7f1ff;
+            color: #0c63e4;
+        }
+
+        /* Models accordion styling */
+        #modelsAccordion .accordion-item {
+            border: 1px solid rgba(0, 0, 0, .125);
+            border-radius: 0.25rem;
+            overflow: hidden;
+        }
+
+        #modelsAccordion .accordion-button {
+            font-size: 1.2rem;
+        }
+
+        #modelsAccordion .accordion-button:not(.collapsed) {
+            background-color: #e7f1ff;
+            color: #0c63e4;
+        }
+
+        /* Make sure the inner accordions look different from the main one */
+        .evaluation-card .accordion-item {
+            border: none;
+            border-bottom: 1px solid rgba(0, 0, 0, .125);
+        }
+
+        .evaluation-card .accordion-button {
+            background-color: #f8f9fa;
+        }
+
+        .evaluation-card .accordion-button:not(.collapsed) {
+            background-color: #e2e6ea;
+            color: #495057;
+        }
+
+        .compare-table th,
+        .compare-table td {
+            vertical-align: middle;
+        }
+
+        .score-bar {
+            height: 20px;
+        }
+
+        /* Handle score width with JavaScript */
+        .score-comparison .progress {
+            height: 24px;
+        }
+
+        .score-comparison .progress-bar {
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            overflow: hidden;
+            font-size: 0.875rem;
+        }
+
+        .story-btn-with-score {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .story-btn-with-score .badge {
+            font-size: 0.75rem;
+            padding: 0.2em 0.5em;
+            font-weight: normal;
+        }
+
+        .sort-controls .btn {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+        }
+    </style>
+    {% block head %}{% endblock %}
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="/">Log Viewer</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
+                aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/">Home</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container mt-4 mb-5">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="bg-light py-3 mt-5">
+        <div class="container text-center">
+            <p class="text-muted mb-0">Log Viewer App &copy; 2025</p>
+        </div>
+    </footer>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+
+</html>

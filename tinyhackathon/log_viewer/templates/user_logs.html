@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Logs for {{ username }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/">Home</a></li>
+        <li class="breadcrumb-item active" aria-current="page">{{ username }}</li>
+    </ol>
+</nav>
+
+<div class="row">
+    <div class="col-md-12">
+        <h1>Logs for {{ username }}</h1>
+
+        {% if log_files %}
+        <div class="row">
+            {% for log_file in log_files %}
+            <div class="col-md-4 mb-4">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">{{ log_file }}</h5>
+                        <p class="card-text text-muted">{{ log_file.split('.')[0] }}</p>
+                        <a href="/logs/{{ username }}/{{ log_file }}" class="btn btn-primary">View Log</a>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="alert alert-info">
+            No log files found for this user.
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
