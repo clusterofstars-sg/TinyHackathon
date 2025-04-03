@@ -8,14 +8,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Dict, List, Optional, Tuple, Union, Set
 
-# Import from llm_scoring
-import llm_scoring
 import pandas as pd
 import typer
 import yaml
 from huggingface_hub import HfApi
 from rich.console import Console
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 # Import from submission.py for authentication
@@ -117,13 +114,8 @@ class UploadTracker:
 
     def should_update_readme(self, min_interval_hours=12) -> bool:
         """Check if README should be updated based on time interval."""
-        last_update = self.state.get("last_readme_update")
-        if last_update is None:
-            return True
-
-        last_update_time = datetime.fromisoformat(last_update)
-        hours_since_update = (datetime.now() - last_update_time).total_seconds() / 3600
-        return hours_since_update >= min_interval_hours
+        # Always update README when requested
+        return True
 
 
 # File-based functions to replace ScoringTracker
@@ -131,28 +123,26 @@ def is_submission_scored(username: str, submission_id: str, model_name: Optional
     """Check if a submission has been scored by looking for CSV files.
 
     Args:
-    username: The username of the submission owner
+        username: The username of the submission owner
         submission_id: The ID of the submission
         model_name: Optional model name to check if this specific model has scored the submission
-    base_dir: Base directory for submissions
+        base_dir: Base directory for submissions
 
     Returns:
         True if the submission has been scored (by the specified model if model_name is provided)
     """
-    submission_dir = Path(base_dir) / username / submission_id
-
-    # If the directory doesn't exist, the submission hasn't been scored
+    # Use only the "submissions" subdirectory
+    submission_dir = Path(base_dir) / "submissions" / username / submission_id
     if not submission_dir.exists():
         return False
 
-    # If model_name is specified, check for that specific model's CSV file
     if model_name is not None:
         model_csv = submission_dir / f"{model_name}.csv"
         return model_csv.exists()
 
-    # Otherwise, check if any model has scored this submission (look for any CSV file except summary files)
+    # Otherwise, check for any model CSV files (excluding summary/history)
     model_csvs = list(submission_dir.glob("*.csv"))
-    return any(csv_file.name != "submission_summary.csv" and csv_file.name != "score_history.csv" for csv_file in model_csvs)
+    return any(csv_file.name not in ("submission_summary.csv", "score_history.csv") for csv_file in model_csvs)
 
 
 def get_scored_models(username: str, submission_id: str, base_dir: str = "submissions") -> List[str]:
@@ -166,17 +156,15 @@ def get_scored_models(username: str, submission_id: str, base_dir: str = "submis
     Returns:
         List of model names that have scored this submission
     """
-    submission_dir = Path(base_dir) / username / submission_id
+    submission_dir = Path(base_dir) / "submissions" / username / submission_id
 
     if not submission_dir.exists():
         return []
 
-    # Get all CSV files except submission_summary.csv and score_history.csv
+    # Exclude submission_summary.csv and score_history.csv
     model_csvs = [
         csv_file for csv_file in submission_dir.glob("*.csv") if csv_file.name not in ("submission_summary.csv", "score_history.csv")
     ]
-
-    # Extract model names from filenames (without .csv extension)
     return [csv_file.stem for csv_file in model_csvs]
 
 
@@ -190,9 +178,11 @@ def get_all_scored_submissions(base_dir: str = "submissions") -> Dict[str, Dict[
         Dictionary mapping usernames to dictionaries mapping submission_ids to information about scored submissions
     """
     result = {"scored_submissions": {}}
-    base_path = Path(base_dir)
 
-    # Scan all user directories
+    # Only scan inside "submissions"
+    base_path = Path(base_dir) / "submissions"
+
+    # Scan each user's folder
     for user_dir in base_path.glob("*"):
         if not user_dir.is_dir():
             continue
@@ -200,20 +190,15 @@ def get_all_scored_submissions(base_dir: str = "submissions") -> Dict[str, Dict[
         username = user_dir.name
         result["scored_submissions"][username] = {}
 
-        # Scan all submission directories for this user
+        # For each submission_id folder
         for submission_dir in user_dir.glob("*"):
             if not submission_dir.is_dir():
                 continue
 
             submission_id = submission_dir.name
-
-            # Get scored models for this submission
             scored_models = get_scored_models(username, submission_id, base_dir)
-
             if scored_models:
-                timestamp = (
-                    extract_submission_datetime(submission_id) if "extract_submission_datetime" in globals() else datetime.now().isoformat()
-                )
+                timestamp = extract_submission_datetime(submission_id)
                 result["scored_submissions"][username][submission_id] = {"models": scored_models, "timestamp": timestamp}
 
     return result
@@ -620,7 +605,7 @@ def save_model_csv(
         Path to the saved CSV file
     """
     # Create the directory structure
-    submission_dir = Path(base_dir) / username / submission_id
+    submission_dir = Path(base_dir) / "submissions" / username / submission_id
     submission_dir.mkdir(parents=True, exist_ok=True)
 
     # Define the CSV file path
@@ -661,12 +646,12 @@ def find_model_csvs(username: str, submission_id: str, base_dir: str = "submissi
     Returns:
         List of model CSV paths
     """
-    submission_dir = Path(base_dir) / username / submission_id
-    if not submission_dir.exists():
-        return []
-
-    # Find all CSV files except summary files
-    model_csvs = [file for file in submission_dir.glob("*.csv") if file.stem != "submission_summary"]
+    submission_dir = Path(base_dir) / "submissions" / username / submission_id
+    model_csvs = []
+    if submission_dir.exists():
+        model_csvs.extend(
+            file for file in submission_dir.glob("*.csv") if file.stem != "submission_summary" and file.name != "score_history.csv"
+        )
     return model_csvs
 
 
@@ -761,29 +746,23 @@ def save_submission_summary(
     Returns:
         Path to the summary CSV if successful, None otherwise
     """
-    # Calculate submission average
+    # Calculate or return None if no data:
     summary_df = calculate_submission_average(username, submission_id, base_dir)
-
     if summary_df is None:
         return None
 
-    # Create the directory structure
-    submission_dir = Path(base_dir) / username / submission_id
+    # Single unified path
+    submission_dir = Path(base_dir) / "submissions" / username / submission_id
     submission_dir.mkdir(parents=True, exist_ok=True)
 
-    # Define the summary CSV path
     summary_path = submission_dir / "submission_summary.csv"
-
-    # Only handle existing summary if not overwriting
     if summary_path.exists() and not overwrite:
         console.print(f"[yellow]Summary file already exists and overwrite=False: {summary_path}[/yellow]")
         return summary_path
 
-    # Save the summary DataFrame
     summary_df.to_csv(summary_path, index=False)
     action = "Updated" if summary_path.exists() else "Saved"
     console.print(f"[green]{action} submission summary to: {summary_path}[/green]")
-
     return summary_path
 
 
@@ -809,8 +788,7 @@ def update_user_score_history(
     Returns:
         Path to the updated history CSV
     """
-    # Create the user directory if it doesn't exist
-    user_dir = Path(base_dir) / username
+    user_dir = Path(base_dir) / "submissions" / username
     user_dir.mkdir(parents=True, exist_ok=True)
 
     history_path = user_dir / "score_history.csv"
@@ -859,80 +837,62 @@ def update_user_score_history(
 
 
 def read_user_metadata(username: str, base_dir: str = "submissions") -> str:
-    """Read user metadata from metadata.json file.
+    """Read user metadata from the metadata.json file.
+
+    Currently, this is only used to get the weight class for leaderboards.
 
     Args:
-        username: Username of the user
+        username: Username of the submission
         base_dir: Base directory for submissions
 
     Returns:
-        Weight class as a string: 'small', 'medium', or 'large'
+        User's weight class (small, medium, large) or "unknown"
     """
-    # First check in downloaded_submissions directory since we know the files are there
-    downloads_dir = Path("downloaded_submissions")
-    downloads_metadata_path = downloads_dir / username / "metadata.json"
+    # First try the standard path in the base_dir
+    user_dir = Path(base_dir) / "submissions" / username
+    metadata_path = user_dir / "metadata.json"
 
-    if downloads_metadata_path.exists():
-        metadata_path = downloads_metadata_path
-        console.print(f"[blue]Found metadata.json in downloads directory for {username}[/blue]")
-    else:
-        # If not in downloads, check in the submissions directory
-        user_dir = Path(base_dir) / username
-        metadata_path = user_dir / "metadata.json"
-
-        # If not found in scores directory, check test submissions directory if needed
-        if not metadata_path.exists():
-            # Detect if we're using test or production mode based on base_dir
-            is_test_mode = "test" in base_dir.lower()
-
-            # Determine the correct downloaded submissions directory for test mode
-            if is_test_mode:
-                test_downloads_dir = Path("downloaded_submissions_test")
-                test_downloads_metadata_path = test_downloads_dir / username / "metadata.json"
-
-                if test_downloads_metadata_path.exists():
-                    metadata_path = test_downloads_metadata_path
-                    console.print(f"[blue]Found metadata.json in test downloads directory for {username}[/blue]")
-
-    # Default to small if metadata doesn't exist
+    # If not found, try in downloaded_submissions
     if not metadata_path.exists():
-        console.print(f"[yellow]No metadata.json found for {username}, defaulting to 'small' weight class[/yellow]")
-        return "small"
+        alt_metadata_path = Path("downloaded_submissions") / username / "metadata.json"
+        if alt_metadata_path.exists():
+            metadata_path = alt_metadata_path
 
-    try:
-        with open(metadata_path, "r") as f:
-            metadata = json.load(f)
-
-        # Get weight class or default to small
-        weight_class = metadata.get("weight_class", "small")
-
-        # Validate weight class
-        if weight_class not in ["small", "medium", "large"]:
-            console.print(f"[yellow]Invalid weight class: {weight_class} for user {username}, defaulting to 'small'[/yellow]")
-            return "small"
-
-        console.print(f"[green]Using weight class '{weight_class}' for user {username}[/green]")
-        return weight_class
-    except Exception as e:
-        console.print(f"[red]Error reading metadata for {username}: {e}[/red]")
-        return "small"
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text())
+            return metadata.get("weight_class", "unknown")
+        except Exception as e:
+            console.print(f"[yellow]Error reading metadata for {username}: {e}[/yellow]")
+    return "unknown"
 
 
 def find_all_user_histories(base_dir: str = "submissions") -> List[Path]:
-    """Find all user score history files.
+    """Find all user history files in the base directory.
 
     Args:
         base_dir: Base directory for submissions
 
     Returns:
-        List of paths to score_history.csv files
+        List of paths to history files
     """
-    base_path = Path(base_dir)
-    if not base_path.exists():
-        return []
-
-    # Find all score_history.csv files
+    base_path = Path(base_dir) / "submissions"
     history_files = list(base_path.glob("*/score_history.csv"))
+
+    # Also check in downloaded_submissions directory
+    downloaded_path = Path("downloaded_submissions") / "submissions"
+    if downloaded_path.exists():
+        history_files.extend(list(downloaded_path.glob("*/score_history.csv")))
+
+    # Also check directly in downloaded_submissions/<username>
+    downloaded_direct_path = Path("downloaded_submissions")
+    if downloaded_direct_path.exists():
+        direct_history_files = list(downloaded_direct_path.glob("*/score_history.csv"))
+        # Filter out files from the submissions subdirectory we already found
+        for file in direct_history_files:
+            if "submissions" not in str(file.parent):
+                history_files.append(file)
+
     return history_files
 
 
@@ -1195,7 +1155,7 @@ def upload_user_files(
     Returns:
         Dictionary with counts of uploaded files
     """
-    user_dir = Path(base_dir) / username
+    user_dir = Path(base_dir) / "submissions" / username
     if not user_dir.exists():
         console.print(f"[yellow]User directory not found: {user_dir}[/yellow]")
         return {"uploaded": 0, "skipped": 0, "error": 0}
@@ -1372,7 +1332,7 @@ def upload_all_user_files(base_dir: str = "submissions", repo_id: str = "cluster
     Returns:
         Dictionary with counts of uploaded files
     """
-    base_path = Path(base_dir)
+    base_path = Path(base_dir) / "submissions"
     if not base_path.exists():
         console.print(f"[yellow]Base directory not found: {base_path}[/yellow]")
         return {"uploaded": 0, "skipped": 0, "error": 0}
@@ -1591,9 +1551,9 @@ def update_repository_readme(
     # Create tracker and check if update is needed (unless forced)
     is_test_mode = "Test" in repo_id
     tracker = UploadTracker(is_test_mode=is_test_mode)
-    if not force_update and not tracker.should_update_readme():
-        console.print("[yellow]README was updated recently. Skipping update.[/yellow]")
-        return True
+    # Always update README regardless of time
+    # Initialize other tracker state
+    tracker._load_state()
 
     # Create temporary directory for README work
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -1781,6 +1741,41 @@ def download_existing_scores(
                     # Update timestamp
                     scored_submissions[username][submission_id]["timestamp"] = extract_submission_datetime(submission_id)
 
+    # Download metadata.json files first
+    console.print("[yellow]Downloading user metadata...[/yellow]")
+    metadata_files = [f for f in files if f.endswith("metadata.json")]
+    for file_path in metadata_files:
+        if not file_path.startswith("submissions/"):
+            continue
+
+        # Extract username
+        parts = file_path.split("/")
+        if len(parts) < 3:
+            continue
+
+        username = parts[1]
+        filename = parts[2]
+
+        if filename != "metadata.json":
+            continue
+
+        # Create directory structure using the new unified path
+        user_dir = Path(base_dir) / "submissions" / username
+        user_dir.mkdir(parents=True, exist_ok=True)
+
+        # Download the file
+        local_path = user_dir / "metadata.json"
+        try:
+            if not local_path.exists() or is_test_mode:
+                _ = api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=file_path, local_dir=Path(base_dir))
+                results["downloaded"] += 1
+                console.print(f"[green]Downloaded metadata for {username}[/green]")
+            else:
+                results["skipped"] += 1
+        except Exception as e:
+            console.print(f"[red]Error downloading metadata for {username}: {e}[/red]")
+            results["error"] += 1
+
     # Download all summary files first
     console.print("[yellow]Downloading submission summaries and model scores...[/yellow]")
     for file_path in files:
@@ -1797,8 +1792,8 @@ def download_existing_scores(
         submission_id = parts[2]
         filename = parts[3]
 
-        # Create directory structure
-        submission_dir = Path(base_dir) / username / submission_id
+        # Create directory structure - use the new unified path
+        submission_dir = Path(base_dir) / "submissions" / username / submission_id
         submission_dir.mkdir(parents=True, exist_ok=True)
 
         # Download the file
@@ -1816,7 +1811,7 @@ def download_existing_scores(
     # Download user histories
     for username in scored_submissions:
         history_path = f"submissions/{username}/score_history.csv"
-        local_history_path = Path(base_dir) / username / "score_history.csv"
+        local_history_path = Path(base_dir) / "submissions" / username / "score_history.csv"
 
         if history_path in files:
             if not local_history_path.exists() or is_test_mode:  # Always download in test mode for testing
@@ -1965,10 +1960,6 @@ def setup_api_client(upload: bool) -> Optional[HfApi]:
         Optional[HfApi]: Authenticated API client if upload is True and
         authentication succeeds, None otherwise
     """
-    if not upload:
-        console.print("[yellow]Upload is disabled, skipping API authentication[/yellow]")
-        return None
-
     try:
         _, api = get_hf_user()
         console.print("[green]Successfully authenticated with Hugging Face[/green]")
@@ -2018,23 +2009,19 @@ def download_submissions_and_scores(
         console.print(f"[red]Error downloading new submissions: {e}[/red]")
         # Continue with existing submissions if download fails
 
-    # Download existing scores if API client is available
-    if api_client is not None:
-        try:
-            # Initial download of existing scores to:
-            # 1. Avoid duplicate work by having local copies of already scored submissions
-            # 2. Ensure we have the most current state before determining which submissions need scoring
-            # 3. This is especially important in collaborative environments where multiple scorers may be working
-            download_stats = download_existing_scores(
-                repo_id=env_config.scores_repo_id, base_dir=scores_dir, is_test_mode=env_config.use_test_score
-            )
+    try:
+        # Initial download of existing scores to:
+        # 1. Avoid duplicate work by having local copies of already scored submissions
+        # 2. Ensure we have the most current state before determining which submissions need scoring
+        # 3. This is especially important in collaborative environments where multiple scorers may be working
+        download_stats = download_existing_scores(
+            repo_id=env_config.scores_repo_id, base_dir=scores_dir, is_test_mode=env_config.use_test_score
+        )
 
-            result["scores_downloaded"] = True
-            result["download_stats"] = download_stats
-        except Exception as e:
-            console.print(f"[yellow]Could not download existing scores: {e}[/yellow]")
-    else:
-        console.print("[yellow]No API client available, skipping score download[/yellow]")
+        result["scores_downloaded"] = True
+        result["download_stats"] = download_stats
+    except Exception as e:
+        console.print(f"[yellow]Could not download existing scores: {e}[/yellow]")
 
     return result
 
@@ -2068,17 +2055,18 @@ def find_unscored_submissions(
     submission_count = 0
     unscored_count = 0
 
-    # Get list of all CSV files in the submissions directory
+    # First, check in the top-level user directories (old format)
     for user_dir in submission_dir.glob("*"):
-        if not user_dir.is_dir():
+        if not user_dir.is_dir() or user_dir.name == "submissions" or user_dir.name == "__pycache__" or user_dir.name.startswith("."):
             continue
+
+        username = user_dir.name
 
         for csv_file in user_dir.glob("*.csv"):
             # Skip summary files
             if csv_file.name == "submission_summary.csv" or csv_file.name == "score_history.csv":
                 continue
 
-            username = user_dir.name
             submission_id = csv_file.stem
             submission_count += 1
 
@@ -2094,6 +2082,36 @@ def find_unscored_submissions(
                         }
                     )
                     unscored_count += 1
+
+    # Next, check in the submissions subdirectory (new format)
+    submissions_subdir = submission_dir / "submissions"
+    if submissions_subdir.exists():
+        for user_dir in submissions_subdir.glob("*"):
+            if not user_dir.is_dir() or user_dir.name == "__pycache__" or user_dir.name.startswith("."):
+                continue
+
+            username = user_dir.name
+
+            for csv_file in user_dir.glob("*.csv"):
+                # Skip summary files
+                if csv_file.name == "submission_summary.csv" or csv_file.name == "score_history.csv":
+                    continue
+
+                submission_id = csv_file.stem
+                submission_count += 1
+
+                # Check which models need to score this submission
+                for model_name in model_names:
+                    # Check if this model has already scored this submission
+                    if not is_submission_scored(username, submission_id, model_name, base_dir=scores_dir):
+                        unscored_files_by_model[model_name].append(
+                            {
+                                "username": username,
+                                "submission_id": submission_id,
+                                "csv_path": csv_file,
+                            }
+                        )
+                        unscored_count += 1
 
     console.print("[green]Completed scanning for unscored submissions[/green]")
 
@@ -2146,6 +2164,9 @@ def score_submissions(
     Returns:
         Set of tuples (username, submission_id) for successfully scored submissions
     """
+    # Import from llm_scoring
+    import llm_scoring
+
     # Initialize set to track successfully scored submissions
     successfully_scored_submissions = set()
 
