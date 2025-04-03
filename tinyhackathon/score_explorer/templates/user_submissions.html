@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}{{ username }}'s Submissions - TinyHackathon Score Explorer{% endblock %}
+
+{% block content %}
+{# Removed justify-content-center and changed col-md-10 to col-12 for wider layout #}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h2 class="mb-0">
+                        <i class="fas fa-user me-2"></i>{{ username }}'s Submissions
+                    </h2>
+                    <a href="/users" class="btn btn-sm btn-outline-light">
+                        <i class="fas fa-arrow-left me-1"></i> Back to Users
+                    </a>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="content-section">
+                    <p class="lead">
+                        Viewing all submissions for {{ username }}.
+                    </p>
+                </div>
+
+                {% if submissions %}
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Submission ID</th>
+                                {% for category in categories %}
+                                <th class="text-capitalize">{{ category.replace('_', ' ') }}</th>
+                                {% endfor %}
+                                <th>Judges</th>
+                                <th>View</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for submission in submissions %}
+                            <tr>
+                                <td>
+                                    <div>{{ submission.id }}</div>
+                                    <small class="text-muted">
+                                        {% set date_part = submission.id.split('_')[0] %}
+                                        {% set time_part = submission.id.split('_')[1] if '_' in submission.id else ''
+                                        %}
+                                        {% if date_part|length == 8 and time_part|length == 6 %}
+                                        {{ date_part[0:4] }}-{{ date_part[4:6] }}-{{ date_part[6:8] }}
+                                        {{ time_part[0:2] }}:{{ time_part[2:4] }}:{{ time_part[4:6] }}
+                                        {% else %}
+                                        {{ submission.id }}
+                                        {% endif %}
+                                    </small>
+                                </td>
+                                {% for category in categories %}
+                                <td>
+                                    {% set score = submission.scores.get(category, none) %}
+                                    {% if score is not none %}
+                                    <span class="badge bg-{{ 'success' if score >= 3.5 else 'primary' if score >= 2.5 else 'warning' }}">
+                                        {{ "%.2f"|format(score) }}
+                                    </span>
+                                    {% else %}
+                                    <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                {% endfor %}
+                                <td>
+                                    <div class="d-flex flex-wrap gap-1">
+                                        {% for model in submission.models %}
+                                        <span class="badge bg-info">{{ model }}</span>
+                                        {% endfor %}
+                                    </div>
+                                </td>
+                                <td>
+                                    <a href="/users/{{ username }}/{{ submission.id }}" class="btn btn-sm btn-primary">
+                                        <i class="fas fa-search-plus me-1"></i> View Detailed Scores
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-warning" role="alert">
+                    <i class="fas fa-exclamation-triangle me-2"></i> No submissions found for this user.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

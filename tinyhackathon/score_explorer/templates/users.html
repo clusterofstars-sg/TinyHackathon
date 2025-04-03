@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Users - TinyHackathon Score Explorer{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-10">
+        <div class="card">
+            <div class="card-header">
+                <h2 class="mb-0"><i class="fas fa-users me-2"></i>Users</h2>
+            </div>
+            <div class="card-body">
+                <div class="content-section">
+                    <p class="lead">
+                        Browse users with scored submissions.
+                    </p>
+                </div>
+
+                {% if users %}
+                <div class="row row-cols-1 row-cols-md-3 g-4">
+                    {% for user in users %}
+                    <div class="col">
+                        <div class="card h-100">
+                            <div class="card-body">
+                                <h5 class="card-title">
+                                    <i class="fas fa-user me-2"></i>{{ user }}
+                                </h5>
+                                <p class="card-text">
+                                    <span class="badge bg-primary mb-2">
+                                        <i class="fas fa-file-alt me-1"></i> {{ user_stats[user].count }} submissions
+                                    </span>
+                                    <br>
+                                    {% if user_stats[user].best_submission_id %}
+                                        <span class="badge bg-success mb-2">
+                                            <i class="fas fa-star me-1"></i> Best Score: {{ "%.2f"|format(user_stats[user].best_score) }}
+                                        </span>
+                                        <br>
+                                        <small class="text-muted">in submission: {{ user_stats[user].best_submission_id }}</small>
+                                    {% else %}
+                                        <span class="badge bg-secondary mb-2">
+                                            <i class="fas fa-star-half-alt me-1"></i> No best score found
+                                        </span>
+                                    {% endif %}
+                                </p>
+                                <a href="/users/{{ user }}" class="btn btn-primary">
+                                    <i class="fas fa-eye me-1"></i> View Submissions
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="alert alert-warning" role="alert">
+                    <i class="fas fa-exclamation-triangle me-2"></i> No users found. Please <a href="/download"
+                        class="alert-link">download data</a> first.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

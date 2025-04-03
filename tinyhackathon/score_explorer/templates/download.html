@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+
+{% block title %}Download Data - TinyHackathon Score Explorer{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header">
+                <h2 class="mb-0"><i class="fas fa-download me-2"></i>Download Data</h2>
+            </div>
+            <div class="card-body">
+                <div class="content-section">
+                    <p class="lead">
+                        Download submissions and scores from the TinyHackathon repositories.
+                    </p>
+                    <p>
+                        This will download all submissions and scores to the score_explorer_data directory.
+                        The data will be used by the Score Explorer to show submissions with their scores.
+                    </p>
+                </div>
+
+                {% if download_error %}
+                <div class="alert alert-warning" role="alert">
+                    <h4 class="alert-heading"><i class="fas fa-exclamation-triangle me-2"></i>Authentication Error</h4>
+                    <p>{{ download_error }}</p>
+                </div>
+                {% endif %}
+
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="card mb-3">
+                            <div class="card-header">Download Statistics</div>
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <div>
+                                        <i class="fas fa-file-alt me-2"></i> Submissions:
+                                    </div>
+                                    <span class="badge bg-primary">{{ download_stats.submissions }}</span>
+                                </div>
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <div>
+                                        <i class="fas fa-star me-2"></i> Score Files:
+                                    </div>
+                                    <span class="badge bg-primary">{{ download_stats.scores }}</span>
+                                </div>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <i class="fas fa-trophy me-2"></i> Leaderboards:
+                                    </div>
+                                    <span class="badge bg-primary">{{ download_stats.leaderboards }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card mb-3">
+                            <div class="card-header">Actions</div>
+                            <div class="card-body">
+                                <div class="d-grid gap-2">
+                                    <a href="/download?refresh=true" class="btn btn-primary btn-sm">
+                                        <i class="fas fa-sync-alt me-2"></i> Refresh Data
+                                    </a>
+                                    {% if download_stats.scores > 0 %}
+                                    <a href="/users" class="btn btn-success btn-sm">
+                                        <i class="fas fa-users me-2"></i> Explore Users
+                                    </a>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card mb-3">
+                            <div class="card-header">Leaderboards</div>
+                            <div class="card-body">
+                                {% if download_stats.leaderboards > 0 %}
+                                <div class="list-group">
+                                    {% if 'global' in leaderboards %}
+                                    <a href="/leaderboard/global" 
+                                       class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                                        <span><i class="fas fa-trophy me-2"></i> Global</span>
+                                        <i class="fas fa-chevron-right"></i>
+                                    </a>
+                                    {% endif %}
+                                    {% if 'large' in leaderboards %}
+                                    <a href="/leaderboard/large" 
+                                       class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                                        <span><i class="fas fa-trophy me-2"></i> Large Models</span>
+                                        <i class="fas fa-chevron-right"></i>
+                                    </a>
+                                    {% endif %}
+                                    {% if 'medium' in leaderboards %}
+                                    <a href="/leaderboard/medium" 
+                                       class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                                        <span><i class="fas fa-trophy me-2"></i> Medium Models</span>
+                                        <i class="fas fa-chevron-right"></i>
+                                    </a>
+                                    {% endif %}
+                                    {% if 'small' in leaderboards %}
+                                    <a href="/leaderboard/small" 
+                                       class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                                        <span><i class="fas fa-trophy me-2"></i> Small Models</span>
+                                        <i class="fas fa-chevron-right"></i>
+                                    </a>
+                                    {% endif %}
+                                </div>
+                                {% else %}
+                                <div class="alert alert-info mb-0">
+                                    <i class="fas fa-info-circle me-2"></i> No leaderboard files available.
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {% if download_stats.scores == 0 %}
+                <div class="alert alert-info mt-3" role="alert">
+                    <i class="fas fa-info-circle me-2"></i>
+                    <strong>No score data available.</strong> If you have existing data in
+                    <code>score_explorer_data</code> directory, ensure it has the correct structure:
+                    <pre class="mt-2"><code>score_explorer_data/
+├── downloaded_submissions/
+│   └── [username]/
+│       └── [submission_id].csv  # CSV with prompts and completions
+└── scores/
+    └── [username]/
+        └── [submission_id]/
+            └── [model_name].csv  # CSV with scores</code></pre>
+                </div>
+                {% endif %}
+
+                {% if scored_submissions %}
+                <div class="content-section mt-4">
+                    <h3>Downloaded Submissions</h3>
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sm">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Username</th>
+                                    <th>Submission</th>
+                                    <th>Models</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for username, submissions in scored_submissions.items() %}
+                                {% for submission_id, submission_info in submissions.items() %}
+                                <tr>
+                                    <td>{{ username }}</td>
+                                    <td>{{ submission_id }}</td>
+                                    <td>
+                                        <span class="badge bg-info">{{ submission_info.models|length }}</span>
+                                    </td>
+                                    <td>
+                                        <a href="/users/{{ username }}/{{ submission_id }}"
+                                            class="btn btn-sm btn-primary">
+                                            <i class="fas fa-eye me-1"></i> View
+                                        </a>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,147 @@
+/* Custom styling for the new submission page */
+
+/* Make cards more compact with less padding */
+.card {
+    margin-bottom: 0.75rem;
+}
+
+.card-body {
+    padding: 0.5rem;
+}
+
+.card-header {
+    padding: 0.4rem 0.6rem;
+}
+
+/* Make tables more compact */
+.table th,
+.table td {
+    padding: 0.3rem 0.4rem;
+    vertical-align: middle;
+    font-size: 0.875rem;
+}
+
+/* Make score badges more compact */
+.badge {
+    font-size: 0.75rem;
+    padding: 0.2rem 0.4rem;
+}
+
+/* Adjust story badges for better navigation */
+.story-badges {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: 80%;
+    gap: 0.2rem;
+}
+
+.story-badge {
+    margin: 0;
+    min-width: 4.5rem;
+    text-align: center;
+    font-size: 0.75rem;
+    padding: 0.25rem 0.4rem;
+    text-decoration: none;
+    cursor: pointer;
+    transition: transform 0.1s ease, box-shadow 0.2s ease;
+    white-space: nowrap;
+    color: white;
+    font-weight: 500;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.story-badge:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
+    text-decoration: none;
+    color: white;
+}
+
+.story-badge.bg-primary {
+    font-weight: bold;
+    box-shadow: 0 0 5px rgba(13, 110, 253, 0.7);
+}
+
+/* Improve prompt and completion sections */
+.prompt-text,
+.completion-text {
+    font-size: 0.875rem;
+    padding: 0.4rem;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 4px;
+    background-color: rgba(0, 0, 0, 0.02);
+    max-height: 200px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    font-family: monospace;
+}
+
+/* Add some subtle dividers between sections */
+.card+.card {
+    margin-top: 0.75rem;
+}
+
+/* Make section headings more compact */
+.card-header .h5 {
+    font-size: 1rem;
+    margin-bottom: 0.25rem;
+    color: #212529;
+    font-weight: 600;
+}
+
+/* Add hover effect to score rows for better readability */
+.table tbody tr:hover {
+    background-color: rgba(0, 0, 0, 0.03);
+}
+
+/* Make overall submission scores table stand out */
+.card:first-of-type .table {
+    font-weight: 500;
+}
+
+/* Sort buttons */
+.btn-group .btn-outline-primary {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.8rem;
+}
+
+/* Smaller margins for headings inside card bodies */
+.card-body h4,
+.card-body h5,
+.card-body h6 {
+    margin-top: 0.5rem;
+    margin-bottom: 0.25rem;
+}
+
+/* Add media query for smaller screens */
+@media (max-width: 768px) {
+
+    .table th,
+    .table td {
+        padding: 0.25rem 0.35rem;
+        font-size: 0.75rem;
+    }
+
+    .card-body {
+        padding: 0.4rem;
+    }
+
+    .story-badges {
+        max-width: 100%;
+    }
+
+    .story-badge {
+        min-width: 4rem;
+        font-size: 0.7rem;
+        padding: 0.2rem 0.35rem;
+    }
+}
+
+/* Fix for long model names */
+.table th[scope="row"] {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

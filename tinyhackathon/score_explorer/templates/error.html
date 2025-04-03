@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}Error - TinyHackathon Score Explorer{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header bg-danger text-white">
+                <h2 class="mb-0"><i class="fas fa-exclamation-triangle me-2"></i>Error</h2>
+            </div>
+            <div class="card-body text-center">
+                <div class="py-5">
+                    <i class="fas fa-exclamation-circle text-danger" style="font-size: 4rem;"></i>
+                    <h3 class="mt-4">Something went wrong</h3>
+                    <p class="lead">{{ message }}</p>
+                    <div class="mt-4">
+                        <a href="/" class="btn btn-primary me-2">
+                            <i class="fas fa-home me-1"></i> Return Home
+                        </a>
+                        <button onclick="window.history.back()" class="btn btn-secondary">
+                            <i class="fas fa-arrow-left me-1"></i> Go Back
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
