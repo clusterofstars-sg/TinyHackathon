@@ -225,7 +225,7 @@ def upload_submission(
 
 @app.command()
 def submit(
-    submission_path: Annotated[Path, typer.Option(help="Path to the submission file", show_default=False)],
+    submission_path: Annotated[Path, typer.Argument(help="Path to the submission file")],
     submission_name: Annotated[Optional[str], typer.Option(help="Optional user friendly name of the submission ")] = None,
     weight_class: Annotated[Optional[WeightClass], typer.Option(help="Model weight class size (small: up to 30M, medium: up to 60M, or large: up to 120M). If provided this will update the current model weight class.")] = None,
     submit: Annotated[bool, typer.Option("--submit/--test",help="Upload submission (--submit) or test submission (--test). Default's to test submission.")] = False,
