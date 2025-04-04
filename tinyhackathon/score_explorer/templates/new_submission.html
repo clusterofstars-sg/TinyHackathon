@@ -28,8 +28,8 @@
                             <div class="col-md-5">
                                 <div class="input-group">
                                     <span class="input-group-text"><i class="fas fa-search"></i></span>
-                                    <input type="text" class="form-control" name="search" placeholder="Search prompts and completions..." 
-                                           value="{{ search }}">
+                                    <input type="text" class="form-control" name="search"
+                                        placeholder="Search prompts and completions..." value="{{ search }}">
                                 </div>
                             </div>
                             <!-- Sort options -->
@@ -37,16 +37,20 @@
                                 <div class="row g-2">
                                     <div class="col-auto">
                                         <select class="form-select" name="sort">
-                                            <option value="id" {% if current_sort == "id" %}selected{% endif %}>Sort By ID</option>
-                                            <option value="score" {% if current_sort == "score" %}selected{% endif %}>Sort By Score</option>
+                                            <option value="id" {% if current_sort=="id" %}selected{% endif %}>Sort By ID
+                                            </option>
+                                            <option value="score" {% if current_sort=="score" %}selected{% endif %}>Sort
+                                                By Score</option>
                                         </select>
                                     </div>
                                     <div class="col-auto">
                                         <select class="form-select" name="sort_category">
-                                            <option value="overall" {% if current_sort_category == "overall" %}selected{% endif %}>Overall Score</option>
+                                            <option value="overall" {% if current_sort_category=="overall" %}selected{%
+                                                endif %}>Overall Score</option>
                                             {% for category in categories %}
                                             {% if category != "overall" %}
-                                            <option value="{{ category }}" {% if current_sort_category == category %}selected{% endif %}>{{ category|title }}</option>
+                                            <option value="{{ category }}" {% if current_sort_category==category
+                                                %}selected{% endif %}>{{ category|title }}</option>
                                             {% endif %}
                                             {% endfor %}
                                         </select>
@@ -59,7 +63,8 @@
                             </div>
                         </form>
                         <div class="mt-2">
-                            <small class="text-muted">Showing {{ story_ids|length }} of {{ total_items }} items (Page {{ current_page }} of {{ total_pages }})</small>
+                            <small class="text-muted">Showing {{ story_ids|length }} of {{ total_items }} items (Page {{
+                                current_page }} of {{ total_pages }})</small>
                         </div>
                     </div>
                 </div>
@@ -91,7 +96,7 @@
                                         <td class="fw-bold">
                                             <span
                                                 class="badge bg-{{ 'success' if scores.overall >= 3.5 else 'primary' if scores.overall >= 2.5 else 'warning' }}">
-                                                {{ "%.1f"|format(scores.overall) }}
+                                                {{ "%.2f"|format(scores.overall) }}
                                             </span>
                                         </td>
                                         {% else %}
@@ -103,7 +108,7 @@
                                         <td>
                                             <span
                                                 class="badge bg-{{ 'success' if score >= 3.5 else 'primary' if score >= 2.5 else 'warning' }}">
-                                                {{ "%.1f"|format(score) }}
+                                                {{ "%.2f"|format(score) }}
                                             </span>
                                         </td>
                                         {% elif category != "overall" %}
@@ -120,7 +125,7 @@
                                         <td class="fw-bold">
                                             <span
                                                 class="badge bg-{{ 'success' if submission_averages.overall >= 3.5 else 'primary' if submission_averages.overall >= 2.5 else 'warning' }}">
-                                                {{ "%.1f"|format(submission_averages.overall) }}
+                                                {{ "%.2f"|format(submission_averages.overall) }}
                                             </span>
                                         </td>
                                         {% else %}
@@ -132,7 +137,7 @@
                                         <td>
                                             <span
                                                 class="badge bg-{{ 'success' if avg >= 3.5 else 'primary' if avg >= 2.5 else 'warning' }}">
-                                                {{ "%.1f"|format(avg) }}
+                                                {{ "%.2f"|format(avg) }}
                                             </span>
                                         </td>
                                         {% elif category != "overall" %}
@@ -153,20 +158,21 @@
                             <h3 class="h5 mb-0"><i class="fas fa-list me-2"></i>Items</h3>
                             <div>
                                 <div class="btn-group">
-                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page=1&search={{ search }}" 
+                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page=1&search={{ search }}"
                                         class="btn btn-sm btn-outline-secondary {% if current_page == 1 %}disabled{% endif %}">
                                         <i class="fas fa-angle-double-left"></i>
                                     </a>
-                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page={{ current_page - 1 }}&search={{ search }}" 
+                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page={{ current_page - 1 }}&search={{ search }}"
                                         class="btn btn-sm btn-outline-secondary {% if current_page == 1 %}disabled{% endif %}">
                                         <i class="fas fa-angle-left"></i>
                                     </a>
-                                    <span class="btn btn-sm btn-outline-secondary">Page {{ current_page }} of {{ total_pages }}</span>
-                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page={{ current_page + 1 }}&search={{ search }}" 
+                                    <span class="btn btn-sm btn-outline-secondary">Page {{ current_page }} of {{
+                                        total_pages }}</span>
+                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page={{ current_page + 1 }}&search={{ search }}"
                                         class="btn btn-sm btn-outline-secondary {% if current_page == total_pages %}disabled{% endif %}">
                                         <i class="fas fa-angle-right"></i>
                                     </a>
-                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page={{ total_pages }}&search={{ search }}" 
+                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page={{ total_pages }}&search={{ search }}"
                                         class="btn btn-sm btn-outline-secondary {% if current_page == total_pages %}disabled{% endif %}">
                                         <i class="fas fa-angle-double-right"></i>
                                     </a>
@@ -177,12 +183,19 @@
                     <div class="card-body p-2">
                         <div class="item-grid">
                             {% for story_id in story_ids %}
-                            {% set overall_score = avg_scores[story_id]|float %}
-                            <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page={{ current_page }}&search={{ search }}&item_id={{ story_id }}"
+                            {% set overall_score = avg_scores[story_id].overall|float if story_id in avg_scores and 'overall' in avg_scores[story_id] else 0 %}
+                            {% if overall_score >= 3.5 %}
+                                {% set color = "bg-success" %}
+                            {% elif overall_score >= 2.5 %}
+                                {% set color = "bg-primary" %}
+                            {% else %}
+                                {% set color = "bg-warning" %}
+                            {% endif %}
+                            <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page={{ current_page }}&search={{ search }}&item_id={{ story_id }}{% if current_item is not none %}&prev_item={{ prev_item }}&next_item={{ next_item }}{% endif %}"
                                 class="item-badge {% if story_id == current_item %}selected{% endif %}"
                                 data-id="{{ story_id }}">
-                                <span class="badge rounded-pill bg-{{ 'success' if overall_score >= 3.5 else 'primary' if overall_score >= 2.5 else 'warning' }}">
-                                    {{ "%.1f"|format(overall_score) }}
+                                <span class="badge rounded-pill {{ color }}">
+                                    {{ "%.2f"|format(overall_score) }}
                                 </span>
                                 <span class="item-id">Item #{{ story_id }}</span>
                             </a>
@@ -197,7 +210,7 @@
                         class="btn btn-sm btn-outline-primary {% if not prev_item %}disabled{% endif %}">
                         <i class="fas fa-chevron-left"></i> Previous Item
                     </a>
-                    {% if current_item %}
+                    {% if current_item is not none %}
                     <span class="badge bg-dark">Item #{{ current_item }}</span>
                     {% endif %}
                     <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&search={{ search }}&item_id={{ next_item }}"
@@ -207,7 +220,7 @@
                 </div>
 
                 <!-- Current Prompt and Completion -->
-                {% if current_item %}
+                {% if current_item is not none %}
                 <div class="card mb-2">
                     <div class="card-header bg-light py-2">
                         <h3 class="h5 mb-0"><i class="fas fa-file-alt me-2"></i>Item #{{ current_item }} Content</h3>
@@ -249,7 +262,7 @@
                                         <td class="fw-bold">
                                             <span
                                                 class="badge bg-{{ 'success' if evaluation.scores.overall >= 3.5 else 'primary' if evaluation.scores.overall >= 2.5 else 'warning' }}">
-                                                {{ "%.1f"|format(evaluation.scores.overall) }}
+                                                {{ "%.2f"|format(evaluation.scores.overall) }}
                                             </span>
                                         </td>
                                         {% else %}
@@ -261,7 +274,7 @@
                                         <td>
                                             <span
                                                 class="badge bg-{{ 'success' if score >= 3.5 else 'primary' if score >= 2.5 else 'warning' }}">
-                                                {{ "%.1f"|format(score) }}
+                                                {{ "%.2f"|format(score) }}
                                             </span>
                                         </td>
                                         {% elif category != "overall" %}
@@ -274,23 +287,23 @@
                                     <!-- Average row -->
                                     <tr class="table-light">
                                         <th scope="row">Average</th>
-                                        {% if "overall" in item_averages %}
+                                        {% if item_averages and "overall" in item_averages %}
                                         <td class="fw-bold">
                                             <span
                                                 class="badge bg-{{ 'success' if item_averages.overall >= 3.5 else 'primary' if item_averages.overall >= 2.5 else 'warning' }}">
-                                                {{ "%.1f"|format(item_averages.overall) }}
+                                                {{ "%.2f"|format(item_averages.overall) }}
                                             </span>
                                         </td>
                                         {% else %}
                                         <td>-</td>
                                         {% endif %}
                                         {% for category in categories %}
-                                        {% if category != "overall" and category in item_averages %}
-                                        {% set avg = item_averages[category] %}
+                                        {% if category != "overall" and item_averages and category in item_averages %}
+                                        {% set score = item_averages[category] %}
                                         <td>
                                             <span
-                                                class="badge bg-{{ 'success' if avg >= 3.5 else 'primary' if avg >= 2.5 else 'warning' }}">
-                                                {{ "%.1f"|format(avg) }}
+                                                class="badge bg-{{ 'success' if score >= 3.5 else 'primary' if score >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(score) }}
                                             </span>
                                         </td>
                                         {% elif category != "overall" %}
@@ -323,8 +336,8 @@
 <style>
     .item-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-        gap: 10px;
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 5px;
     }
 
     .item-badge {
@@ -332,7 +345,7 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        padding: 10px;
+        padding: 5px;
         border-radius: 5px;
         background-color: #f8f9fa;
         text-decoration: none;
@@ -353,8 +366,8 @@
     }
 
     .item-id {
-        margin-top: 5px;
-        font-size: 0.8rem;
+        margin-top: 3px;
+        font-size: 0.7rem;
     }
 
     .prompt-text,

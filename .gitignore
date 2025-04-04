@@ -171,6 +171,8 @@ scores.json
 leaderboards/
 scores/
 scores_test/
+score_explorer_data/
+configs/
 
 # State files
 .upload_state.json

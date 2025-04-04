@@ -28,3 +28,12 @@
     </div>
 </div>
 {% endblock %}
+
+{% block extra_js %}
+<script>
+    // Hide loading overlay if it's visible
+    if (typeof hideDownloadOverlay === 'function') {
+        hideDownloadOverlay();
+    }
+</script>
+{% endblock %}

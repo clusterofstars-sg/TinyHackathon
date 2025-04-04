@@ -23,26 +23,26 @@
                         <div class="card h-100">
                             <div class="card-body">
                                 <h5 class="card-title">
-                                    <i class="fas fa-user me-2"></i>{{ user }}
+                                    <i class="fas fa-user me-2"></i>{{ user.username }}
                                 </h5>
                                 <p class="card-text">
                                     <span class="badge bg-primary mb-2">
-                                        <i class="fas fa-file-alt me-1"></i> {{ user_stats[user].count }} submissions
+                                        <i class="fas fa-file-alt me-1"></i> {{ user.submission_count }} submissions
                                     </span>
                                     <br>
-                                    {% if user_stats[user].best_submission_id %}
+                                    {% if user.best_submission %}
                                         <span class="badge bg-success mb-2">
-                                            <i class="fas fa-star me-1"></i> Best Score: {{ "%.2f"|format(user_stats[user].best_score) }}
+                                            <i class="fas fa-star me-1"></i> Best Score: {{ "%.2f"|format(user.best_score) }}
                                         </span>
                                         <br>
-                                        <small class="text-muted">in submission: {{ user_stats[user].best_submission_id }}</small>
+                                        <small class="text-muted">in submission: {{ user.best_submission }}</small>
                                     {% else %}
                                         <span class="badge bg-secondary mb-2">
                                             <i class="fas fa-star-half-alt me-1"></i> No best score found
                                         </span>
                                     {% endif %}
                                 </p>
-                                <a href="/users/{{ user }}" class="btn btn-primary">
+                                <a href="/users/{{ user.username }}" class="btn btn-primary">
                                     <i class="fas fa-eye me-1"></i> View Submissions
                                 </a>
                             </div>
@@ -51,11 +51,16 @@
                     {% endfor %}
                 </div>
                 {% else %}
-                <div class="alert alert-warning" role="alert">
-                    <i class="fas fa-exclamation-triangle me-2"></i> No users found. Please <a href="/download"
-                        class="alert-link">download data</a> first.
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle me-2"></i> {{ message|default("No users found with submissions.") }}
                 </div>
                 {% endif %}
+
+                <div class="mt-3">
+                    <a href="/" class="btn btn-primary btn-sm">
+                        <i class="fas fa-home me-2"></i>Back to Home
+                    </a>
+                </div>
             </div>
         </div>
     </div>
