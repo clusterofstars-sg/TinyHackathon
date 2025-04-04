@@ -20,6 +20,11 @@
                 <div class="content-section">
                     <p class="lead">
                         Viewing all submissions for {{ username }}.
+                        {% if unscored_count > 0 %}
+                        <span class="badge bg-secondary ms-2">
+                            <i class="fas fa-hourglass-half me-1"></i> {{ unscored_count }} pending scoring
+                        </span>
+                        {% endif %}
                     </p>
                 </div>
 
@@ -29,12 +34,14 @@
                         <thead class="table-light">
                             <tr>
                                 <th>Submission ID</th>
+                                <th>Status</th>
                                 <th>Overall</th>
-                                <th>Grammar</th>
                                 <th>Coherence</th>
-                                <th>Creativity</th>
                                 <th>Consistency</th>
+                                <th>Creativity</th>
+                                <th>Grammar</th>
                                 <th>Plot</th>
+                                <th>Judges</th>
                                 <th>View</th>
                             </tr>
                         </thead>
@@ -45,138 +52,164 @@
                                     <div>{{ submission.submission_id }}</div>
                                     <small class="text-muted">
                                         {% set date_part = submission.submission_id.split('_')[0] %}
-                                        {% set time_part = submission.submission_id.split('_')[1] if '_' in submission.submission_id else '' %}
+                                        {% set time_part = submission.submission_id.split('_')[1] if '_' in
+                                        submission.submission_id else '' %}
                                         {% if date_part|length == 8 and time_part|length == 6 %}
-                                            {{ date_part[0:4] }}-{{ date_part[4:6] }}-{{ date_part[6:8] }}
-                                            {{ time_part[0:2] }}:{{ time_part[2:4] }}:{{ time_part[4:6] }}
+                                        {{ date_part[0:4] }}-{{ date_part[4:6] }}-{{ date_part[6:8] }}
+                                        {{ time_part[0:2] }}:{{ time_part[2:4] }}:{{ time_part[4:6] }}
                                         {% endif %}
                                     </small>
                                 </td>
-                                
+
+                                <!-- Status -->
+                                <td>
+                                    {% if submission.is_scored %}
+                                    {% if submission.models|length < 3 %} <span class="badge bg-info">Partially
+                                        Scored</span>
+                                        {% else %}
+                                        <span class="badge bg-success">Scored</span>
+                                        {% endif %}
+                                        {% else %}
+                                        <span class="badge bg-secondary">Pending</span>
+                                        {% endif %}
+                                </td>
+
                                 <!-- Overall Score -->
                                 <td>
                                     {% if submission.average_score is not none %}
-                                        {% set score = submission.average_score %}
-                                        {% set percent = (score / 5) * 100 %}
-                                        {% if percent >= 80 %}
-                                            {% set color = "bg-success" %}
-                                        {% elif percent >= 60 %}
-                                            {% set color = "bg-primary" %}
-                                        {% else %}
-                                            {% set color = "bg-warning" %}
-                                        {% endif %}
-                                        <span class="badge {{ color }}">
-                                            {{ "%.2f"|format(score) }}
-                                        </span>
+                                    {% set score = submission.average_score %}
+                                    {% set percent = (score / 5) * 100 %}
+                                    {% if percent >= 80 %}
+                                    {% set color = "bg-success" %}
+                                    {% elif percent >= 60 %}
+                                    {% set color = "bg-primary" %}
                                     {% else %}
-                                        <span class="text-muted">-</span>
+                                    {% set color = "bg-warning" %}
+                                    {% endif %}
+                                    <span class="badge {{ color }}">
+                                        {{ "%.2f"|format(score) }}
+                                    </span>
+                                    {% else %}
+                                    <span class="text-muted">-</span>
                                     {% endif %}
                                 </td>
-                                
-                                <!-- Grammar Score -->
-                                <td>
-                                    {% if submission.category_scores and 'grammar' in submission.category_scores %}
-                                        {% set score = submission.category_scores.grammar %}
-                                        {% set percent = (score / 5) * 100 %}
-                                        {% if percent >= 80 %}
-                                            {% set color = "bg-success" %}
-                                        {% elif percent >= 60 %}
-                                            {% set color = "bg-primary" %}
-                                        {% else %}
-                                            {% set color = "bg-warning" %}
-                                        {% endif %}
-                                        <span class="badge {{ color }}">
-                                            {{ "%.2f"|format(score) }}
-                                        </span>
-                                    {% else %}
-                                        <span class="text-muted">-</span>
-                                    {% endif %}
-                                </td>
-                                
+
                                 <!-- Coherence Score -->
                                 <td>
                                     {% if submission.category_scores and 'coherence' in submission.category_scores %}
-                                        {% set score = submission.category_scores.coherence %}
-                                        {% set percent = (score / 5) * 100 %}
-                                        {% if percent >= 80 %}
-                                            {% set color = "bg-success" %}
-                                        {% elif percent >= 60 %}
-                                            {% set color = "bg-primary" %}
-                                        {% else %}
-                                            {% set color = "bg-warning" %}
-                                        {% endif %}
-                                        <span class="badge {{ color }}">
-                                            {{ "%.2f"|format(score) }}
-                                        </span>
+                                    {% set score = submission.category_scores.coherence %}
+                                    {% set percent = (score / 5) * 100 %}
+                                    {% if percent >= 80 %}
+                                    {% set color = "bg-success" %}
+                                    {% elif percent >= 60 %}
+                                    {% set color = "bg-primary" %}
                                     {% else %}
-                                        <span class="text-muted">-</span>
+                                    {% set color = "bg-warning" %}
+                                    {% endif %}
+                                    <span class="badge {{ color }}">
+                                        {{ "%.2f"|format(score) }}
+                                    </span>
+                                    {% else %}
+                                    <span class="text-muted">-</span>
                                     {% endif %}
                                 </td>
-                                
-                                <!-- Creativity Score -->
-                                <td>
-                                    {% if submission.category_scores and 'creativity' in submission.category_scores %}
-                                        {% set score = submission.category_scores.creativity %}
-                                        {% set percent = (score / 5) * 100 %}
-                                        {% if percent >= 80 %}
-                                            {% set color = "bg-success" %}
-                                        {% elif percent >= 60 %}
-                                            {% set color = "bg-primary" %}
-                                        {% else %}
-                                            {% set color = "bg-warning" %}
-                                        {% endif %}
-                                        <span class="badge {{ color }}">
-                                            {{ "%.2f"|format(score) }}
-                                        </span>
-                                    {% else %}
-                                        <span class="text-muted">-</span>
-                                    {% endif %}
-                                </td>
-                                
+
                                 <!-- Consistency Score -->
                                 <td>
                                     {% if submission.category_scores and 'consistency' in submission.category_scores %}
-                                        {% set score = submission.category_scores.consistency %}
-                                        {% set percent = (score / 5) * 100 %}
-                                        {% if percent >= 80 %}
-                                            {% set color = "bg-success" %}
-                                        {% elif percent >= 60 %}
-                                            {% set color = "bg-primary" %}
-                                        {% else %}
-                                            {% set color = "bg-warning" %}
-                                        {% endif %}
-                                        <span class="badge {{ color }}">
-                                            {{ "%.2f"|format(score) }}
-                                        </span>
+                                    {% set score = submission.category_scores.consistency %}
+                                    {% set percent = (score / 5) * 100 %}
+                                    {% if percent >= 80 %}
+                                    {% set color = "bg-success" %}
+                                    {% elif percent >= 60 %}
+                                    {% set color = "bg-primary" %}
                                     {% else %}
-                                        <span class="text-muted">-</span>
+                                    {% set color = "bg-warning" %}
+                                    {% endif %}
+                                    <span class="badge {{ color }}">
+                                        {{ "%.2f"|format(score) }}
+                                    </span>
+                                    {% else %}
+                                    <span class="text-muted">-</span>
                                     {% endif %}
                                 </td>
-                                
+
+                                <!-- Creativity Score -->
+                                <td>
+                                    {% if submission.category_scores and 'creativity' in submission.category_scores %}
+                                    {% set score = submission.category_scores.creativity %}
+                                    {% set percent = (score / 5) * 100 %}
+                                    {% if percent >= 80 %}
+                                    {% set color = "bg-success" %}
+                                    {% elif percent >= 60 %}
+                                    {% set color = "bg-primary" %}
+                                    {% else %}
+                                    {% set color = "bg-warning" %}
+                                    {% endif %}
+                                    <span class="badge {{ color }}">
+                                        {{ "%.2f"|format(score) }}
+                                    </span>
+                                    {% else %}
+                                    <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+
+                                <!-- Grammar Score -->
+                                <td>
+                                    {% if submission.category_scores and 'grammar' in submission.category_scores %}
+                                    {% set score = submission.category_scores.grammar %}
+                                    {% set percent = (score / 5) * 100 %}
+                                    {% if percent >= 80 %}
+                                    {% set color = "bg-success" %}
+                                    {% elif percent >= 60 %}
+                                    {% set color = "bg-primary" %}
+                                    {% else %}
+                                    {% set color = "bg-warning" %}
+                                    {% endif %}
+                                    <span class="badge {{ color }}">
+                                        {{ "%.2f"|format(score) }}
+                                    </span>
+                                    {% else %}
+                                    <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+
                                 <!-- Plot Score -->
                                 <td>
                                     {% if submission.category_scores and 'plot' in submission.category_scores %}
-                                        {% set score = submission.category_scores.plot %}
-                                        {% set percent = (score / 5) * 100 %}
-                                        {% if percent >= 80 %}
-                                            {% set color = "bg-success" %}
-                                        {% elif percent >= 60 %}
-                                            {% set color = "bg-primary" %}
-                                        {% else %}
-                                            {% set color = "bg-warning" %}
-                                        {% endif %}
-                                        <span class="badge {{ color }}">
-                                            {{ "%.2f"|format(score) }}
-                                        </span>
+                                    {% set score = submission.category_scores.plot %}
+                                    {% set percent = (score / 5) * 100 %}
+                                    {% if percent >= 80 %}
+                                    {% set color = "bg-success" %}
+                                    {% elif percent >= 60 %}
+                                    {% set color = "bg-primary" %}
                                     {% else %}
-                                        <span class="text-muted">-</span>
+                                    {% set color = "bg-warning" %}
+                                    {% endif %}
+                                    <span class="badge {{ color }}">
+                                        {{ "%.2f"|format(score) }}
+                                    </span>
+                                    {% else %}
+                                    <span class="text-muted">-</span>
                                     {% endif %}
                                 </td>
-                                
+
+                                <!-- Judges -->
                                 <td>
-                                    <a href="/users/{{ username }}/{{ submission.submission_id }}" 
-                                       class="btn btn-primary btn-sm">
-                                        <i class="fas fa-eye me-1"></i> View
+                                    <div class="d-flex flex-wrap gap-1">
+                                        {% for model in submission.models %}
+                                        <span class="badge bg-info">{{ model }}</span>
+                                        {% endfor %}
+                                        {% if not submission.models %}
+                                        <span class="text-muted">N/A</span>
+                                        {% endif %}
+                                    </div>
+                                </td>
+
+                                <td>
+                                    <a href="/users/{{ username }}/{{ submission.submission_id }}"
+                                        class="btn btn-primary btn-sm">
+                                        <i class="fas fa-eye me-1"></i> View Details
                                     </a>
                                 </td>
                             </tr>

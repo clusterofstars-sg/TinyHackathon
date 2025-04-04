@@ -22,6 +22,8 @@ from tinyhackathon.score_explorer.data_repository import (
     apply_search,
     calculate_dataframe_averages,
     read_leaderboard_file,
+    find_score_directory,
+    find_submission_csv,
     DATA_DIR,
     SUBMISSIONS_DIR,
     SCORES_DIR,
@@ -228,9 +230,33 @@ async def list_user_submissions(request: Request, username: str):
             return templates.TemplateResponse("error.html", {"request": request, "message": f"No submissions found for user {username}"})
 
         submission_data = []
+        scored_count = 0
+        unscored_count = 0
+        
         for submission_id in submissions:
+            # Check if this submission has score files
+            score_dir = find_score_directory(username, submission_id)
+            is_scored = score_dir is not None
+            
+            if is_scored:
+                scored_count += 1
+            else:
+                unscored_count += 1
+                # Check if the submission file exists
+                submission_csv = find_submission_csv(username, submission_id)
+                if not submission_csv:
+                    # Skip this submission if the CSV doesn't exist
+                    continue
+            
             # Get data for each submission
             df = get_cached_submission_data(username, submission_id)
+            
+            # Get model names if available
+            models = []
+            if not df.empty and "model_name" in df.columns:
+                # Filter out "No scores available" placeholder
+                model_names = df["model_name"].unique().tolist()
+                models = [m for m in model_names if m != "No scores available"]
 
             # Calculate category scores
             category_scores = {}
@@ -243,10 +269,12 @@ async def list_user_submissions(request: Request, username: str):
                 # Calculate averages for each category
                 for category in score_categories:
                     if category in df.columns:
-                        category_scores[category] = df[category].mean()
+                        # Only include real scores, not NaN placeholders
+                        if is_scored:
+                            category_scores[category] = df[category].mean()
 
                 # If no scores found, use the calculate_dataframe_averages function
-                if not category_scores and "model_name" in df.columns:
+                if not category_scores and "model_name" in df.columns and is_scored:
                     model_averages, _ = calculate_dataframe_averages(df)
                     # Merge all model scores to get average by category
                     if model_averages:
@@ -266,14 +294,31 @@ async def list_user_submissions(request: Request, username: str):
             # For backward compatibility
             avg_score = category_scores.get("overall") if category_scores else None
 
-            submission_data.append({"submission_id": submission_id, "average_score": avg_score, "category_scores": category_scores})
+            submission_data.append({
+                "submission_id": submission_id, 
+                "is_scored": is_scored,
+                "average_score": avg_score, 
+                "category_scores": category_scores,
+                "models": models
+            })
 
-        # Sort submissions by overall score (highest first)
+        # Sort submissions by overall score (highest first), then by submission_id (most recent first)
         submission_data = sorted(
-            submission_data, key=lambda x: x["average_score"] if x["average_score"] is not None else -float("inf"), reverse=True
+            submission_data, 
+            key=lambda x: (x["average_score"] if x["average_score"] is not None else -float("inf"), x["submission_id"]), 
+            reverse=True
         )
 
-        return templates.TemplateResponse("submissions.html", {"request": request, "username": username, "submissions": submission_data})
+        return templates.TemplateResponse(
+            "submissions.html", 
+            {
+                "request": request, 
+                "username": username, 
+                "submissions": submission_data,
+                "scored_count": scored_count,
+                "unscored_count": unscored_count
+            }
+        )
     except Exception as e:
         logger.exception(f"Error in list_user_submissions: {e}")
         return templates.TemplateResponse("error.html", {"request": request, "message": f"Error: {str(e)}"})
@@ -301,6 +346,12 @@ async def view_submission(
             return templates.TemplateResponse(
                 "error.html", {"request": request, "message": f"No data found for submission {username}/{submission_id}"}
             )
+
+        # Check if this submission has any scores
+        has_scores = True
+        if "model_name" in df.columns and df["model_name"].unique().tolist() == ["No scores available"]:
+            has_scores = False
+            logger.warning(f"Submission {username}/{submission_id} has no score files available")
 
         # Calculate averages for all models and items
         model_averages, avg_scores_per_item = calculate_dataframe_averages(df)
@@ -399,6 +450,7 @@ async def view_submission(
                 "model_averages": model_averages,
                 "submission_averages": submission_averages,
                 "item_averages": item_averages,
+                "has_scores": has_scores,
             },
         )
     except Exception as e:

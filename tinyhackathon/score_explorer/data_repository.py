@@ -99,6 +99,7 @@ def list_submissions(username: str) -> List[str]:
     """Get all submissions for a user from both main and submissions subdirectories."""
     submissions = set()
 
+    # Look in scores directory (scored submissions)
     # Try direct path
     direct_path = SCORES_DIR / username
     if direct_path.exists() and direct_path.is_dir():
@@ -112,6 +113,25 @@ def list_submissions(username: str) -> List[str]:
         for d in subdir_path.iterdir():
             if d.is_dir():
                 submissions.add(d.name)
+    
+    # Look in downloaded_submissions directory (all submissions)
+    # Try direct path in downloaded_submissions
+    submissions_path = SUBMISSIONS_DIR / username
+    if submissions_path.exists() and submissions_path.is_dir():
+        for f in submissions_path.iterdir():
+            if f.is_file() and f.suffix.lower() == '.csv':
+                # Extract submission ID from filename (remove .csv extension)
+                submission_id = f.stem
+                submissions.add(submission_id)
+    
+    # Try submissions subdirectory in downloaded_submissions
+    submissions_subdir_path = SUBMISSIONS_SUBDIR / username
+    if submissions_subdir_path.exists() and submissions_subdir_path.is_dir():
+        for f in submissions_subdir_path.iterdir():
+            if f.is_file() and f.suffix.lower() == '.csv':
+                # Extract submission ID from filename (remove .csv extension)
+                submission_id = f.stem
+                submissions.add(submission_id)
 
     return sorted(list(submissions), reverse=True)  # Most recent first
 
@@ -122,15 +142,27 @@ def load_and_merge_submission_data(username: str, submission_id: str) -> pd.Data
     submission_csv_path = find_submission_csv(username, submission_id)
     score_dir = find_score_directory(username, submission_id)
 
-    if not submission_csv_path or not score_dir:
-        logger.error("Cannot find submission CSV or score directory for " + username + "/" + submission_id)
-        return pd.DataFrame()  # Return empty DataFrame if files not found
+    if not submission_csv_path:
+        logger.error("Cannot find submission CSV for " + username + "/" + submission_id)
+        return pd.DataFrame()  # Return empty DataFrame if submission file not found
 
     # Read submission CSV
     submissions_df = pd.read_csv(submission_csv_path)
     # Ensure item_id is an integer for proper merging
     if "item_id" in submissions_df.columns:
         submissions_df["item_id"] = submissions_df["item_id"].astype(int)
+    else:
+        # If no item_id column, add it based on index
+        submissions_df["item_id"] = submissions_df.index.astype(int)
+
+    # If no score directory is found, return just the submission data
+    if not score_dir:
+        logger.warning("No score directory found for " + username + "/" + submission_id + ". Returning submission data only.")
+        # Add placeholder columns for model_name and basic score categories
+        submissions_df["model_name"] = "No scores available"
+        for category in ["overall", "correctness", "helpfulness", "harmlessness"]:
+            submissions_df[category] = float("nan")
+        return submissions_df
 
     # Get all model CSVs - explicitly exclude submission_summary.csv and score_history.csv
     model_csvs = [csv_file for csv_file in score_dir.glob("*.csv") if csv_file.name not in ["submission_summary.csv", "score_history.csv"]]
@@ -138,8 +170,12 @@ def load_and_merge_submission_data(username: str, submission_id: str) -> pd.Data
     logger.info("Found " + str(len(model_csvs)) + " model CSV files: " + str([csv.name for csv in model_csvs]))
 
     if not model_csvs:
-        logger.warning("No model CSV files found in " + str(score_dir) + "!")
-        return pd.DataFrame()
+        logger.warning("No model CSV files found in " + str(score_dir) + "! Returning submission data only.")
+        # Add placeholder columns for model_name and basic score categories
+        submissions_df["model_name"] = "No scores available"
+        for category in ["overall", "correctness", "helpfulness", "harmlessness"]:
+            submissions_df[category] = float("nan")
+        return submissions_df
 
     # Initialize an empty list to store all model dataframes
     all_model_dfs = []
@@ -149,54 +185,62 @@ def load_and_merge_submission_data(username: str, submission_id: str) -> pd.Data
         model_name = model_csv.stem
         logger.info("Processing scores for model: " + model_name)
 
-        # Read score CSV
-        scores_df = pd.read_csv(model_csv)
+        try:
+            # Read score CSV
+            scores_df = pd.read_csv(model_csv)
 
-        # Make sure we have item_id column or add it
-        if "item_id" not in scores_df.columns:
-            scores_df["item_id"] = scores_df.index
+            # Make sure we have item_id column or add it
+            if "item_id" not in scores_df.columns:
+                scores_df["item_id"] = scores_df.index
 
-        scores_df["item_id"] = scores_df["item_id"].astype(int)
+            scores_df["item_id"] = scores_df["item_id"].astype(int)
 
-        # Add model name to the scores dataframe
-        scores_df["model_name"] = model_name
+            # Add model name to the scores dataframe
+            scores_df["model_name"] = model_name
 
-        # Merge with submission data
-        if "item_id" in submissions_df.columns:
-            # Direct merge if item_id is in submissions
-            merged_df = pd.merge(scores_df, submissions_df[["item_id", "prompt", "completion"]], on="item_id", how="left")
-        else:
-            # If no item_id in submissions, use index-based matching
-            # First try matching by position
-            scores_df = scores_df.reset_index(drop=True)
-            temp_submissions = submissions_df.reset_index(drop=True)
+            # Merge with submission data
+            if "item_id" in submissions_df.columns:
+                # Direct merge if item_id is in submissions
+                merged_df = pd.merge(scores_df, submissions_df[["item_id", "prompt", "completion"]], on="item_id", how="left")
+            else:
+                # If no item_id in submissions, use index-based matching
+                # First try matching by position
+                scores_df = scores_df.reset_index(drop=True)
+                temp_submissions = submissions_df.reset_index(drop=True)
 
-            # Add item_id-based columns from submissions
-            for col in ["prompt", "completion"]:
-                if col in temp_submissions.columns:
-                    scores_df[col] = scores_df["item_id"].apply(
-                        lambda x: temp_submissions.iloc[x][col] if x < len(temp_submissions) else None
-                    )
+                # Add item_id-based columns from submissions
+                for col in ["prompt", "completion"]:
+                    if col in temp_submissions.columns:
+                        scores_df[col] = scores_df["item_id"].apply(
+                            lambda x: temp_submissions.iloc[x][col] if x < len(temp_submissions) else None
+                        )
 
-            merged_df = scores_df
+                merged_df = scores_df
 
-        # Extract and expand score categories
-        score_cols = []
-        for score_category in ScoreCategory.__members__:
-            category_lower = score_category.lower()
-            if category_lower in merged_df.columns:
-                score_cols.append(category_lower)
+            # Extract and expand score categories
+            score_cols = []
+            for score_category in ScoreCategory.__members__:
+                category_lower = score_category.lower()
+                if category_lower in merged_df.columns:
+                    score_cols.append(category_lower)
 
-        # Select only needed columns
-        cols_to_keep = ["item_id", "prompt", "completion", "model_name"] + score_cols
-        merged_df = merged_df[[col for col in cols_to_keep if col in merged_df.columns]]
+            # Select only needed columns
+            cols_to_keep = ["item_id", "prompt", "completion", "model_name"] + score_cols
+            merged_df = merged_df[[col for col in cols_to_keep if col in merged_df.columns]]
 
-        all_model_dfs.append(merged_df)
+            all_model_dfs.append(merged_df)
+        except Exception as e:
+            logger.error(f"Error processing score file {model_csv}: {e}")
+            # Continue with other model files instead of failing completely
 
     # Concatenate all model dataframes
     if not all_model_dfs:
-        logger.warning("No model data could be processed for " + username + "/" + submission_id)
-        return pd.DataFrame()
+        logger.warning("No model data could be processed for " + username + "/" + submission_id + ". Returning submission data only.")
+        # Add placeholder columns for model_name and basic score categories
+        submissions_df["model_name"] = "No scores available"
+        for category in ["overall", "correctness", "helpfulness", "harmlessness"]:
+            submissions_df[category] = float("nan")
+        return submissions_df
 
     final_df = pd.concat(all_model_dfs, ignore_index=True)
 
@@ -235,26 +279,41 @@ def calculate_dataframe_averages(df: pd.DataFrame) -> Tuple[Dict, Dict]:
     # Calculate averages per model
     model_averages = {}
     if "model_name" in df.columns:
-        # Use groupby and agg to calculate means for all score categories at once
-        model_aggs = df.groupby("model_name")[score_categories].mean().reset_index()
+        # Filter out rows with "No scores available" model_name
+        scored_df = df[df["model_name"] != "No scores available"]
 
-        # Convert to dictionary format
-        for _, row in model_aggs.iterrows():
-            model_name = row["model_name"]
-            model_scores = {category: row[category] for category in score_categories if not pd.isna(row[category])}
-            model_averages[model_name] = model_scores
+        if not scored_df.empty:
+            # Use groupby and agg to calculate means for all score categories at once
+            model_aggs = scored_df.groupby("model_name")[score_categories].mean().reset_index()
+
+            # Convert to dictionary format
+            for _, row in model_aggs.iterrows():
+                model_name = row["model_name"]
+                model_scores = {category: row[category] for category in score_categories if not pd.isna(row[category])}
+                model_averages[model_name] = model_scores
+        else:
+            # Handle case where no scores are available
+            logger.info("No scored data available for calculating model averages")
 
     # Calculate averages per item_id
     item_averages = {}
     if "item_id" in df.columns:
-        # Use groupby and agg to calculate means for all score categories at once
-        item_aggs = df.groupby("item_id")[score_categories].mean().reset_index()
+        # Filter out rows with "No scores available" model_name for item averages too
+        scored_df = df[df["model_name"] != "No scores available"]
 
-        # Convert to dictionary format
-        for _, row in item_aggs.iterrows():
-            item_id = row["item_id"]
-            item_scores = {category: row[category] for category in score_categories if not pd.isna(row[category])}
-            item_averages[item_id] = item_scores
+        if not scored_df.empty:
+            # Use groupby and agg to calculate means for all score categories at once
+            item_aggs = scored_df.groupby("item_id")[score_categories].mean().reset_index()
+
+            # Convert to dictionary format
+            for _, row in item_aggs.iterrows():
+                item_id = row["item_id"]
+                item_scores = {category: row[category] for category in score_categories if not pd.isna(row[category])}
+                item_averages[item_id] = item_scores
+        else:
+            # If no scored data, create empty item averages for each unique item_id
+            for item_id in df["item_id"].unique():
+                item_averages[item_id] = {}
 
     return model_averages, item_averages
 
@@ -391,11 +450,30 @@ def compute_user_stats() -> pd.DataFrame:
     user_stats = []
 
     for username in users:
+        # Get all submissions for the user
         submissions = list_submissions(username)
         submission_count = len(submissions)
+        
+        # Count scored and unscored submissions
+        scored_submissions = []
+        unscored_submissions = []
+        
+        for submission_id in submissions:
+            # Check if this submission has score files
+            score_dir = find_score_directory(username, submission_id)
+            if score_dir:
+                scored_submissions.append(submission_id)
+            else:
+                # Check if the submission file exists
+                submission_csv = find_submission_csv(username, submission_id)
+                if submission_csv:
+                    unscored_submissions.append(submission_id)
+        
+        scored_count = len(scored_submissions)
+        unscored_count = len(unscored_submissions)
 
-        # Get the best submission (first in the sorted list)
-        best_submission = submissions[0] if submissions else None
+        # Get the best submission (first in the sorted list of scored submissions)
+        best_submission = scored_submissions[0] if scored_submissions else None
         best_score = None
 
         if best_submission:
@@ -414,9 +492,14 @@ def compute_user_stats() -> pd.DataFrame:
                 if not df.empty and "overall" in df.columns:
                     best_score = df["overall"].mean()
 
-        user_stats.append(
-            {"username": username, "submission_count": submission_count, "best_submission": best_submission, "best_score": best_score}
-        )
+        user_stats.append({
+            "username": username, 
+            "submission_count": submission_count,
+            "scored_count": scored_count,
+            "unscored_count": unscored_count,
+            "best_submission": best_submission, 
+            "best_score": best_score
+        })
 
     return pd.DataFrame(user_stats)
 

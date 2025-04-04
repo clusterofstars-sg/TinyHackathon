@@ -21,6 +21,11 @@
                 <div class="content-section">
                     <p class="lead">
                         Viewing all submissions for {{ username }}.
+                        {% if unscored_count > 0 %}
+                        <span class="badge bg-secondary ms-2">
+                            <i class="fas fa-hourglass-half me-1"></i> {{ unscored_count }} pending scoring
+                        </span>
+                        {% endif %}
                     </p>
                 </div>
 
@@ -30,6 +35,7 @@
                         <thead class="table-light">
                             <tr>
                                 <th>Submission ID</th>
+                                <th>Status</th>
                                 {% for category in categories %}
                                 <th class="text-capitalize">{{ category.replace('_', ' ') }}</th>
                                 {% endfor %}
@@ -54,6 +60,13 @@
                                         {% endif %}
                                     </small>
                                 </td>
+                                <td>
+                                    {% if submission.is_scored %}
+                                    <span class="badge bg-success">Scored</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">Pending</span>
+                                    {% endif %}
+                                </td>
                                 {% for category in categories %}
                                 <td>
                                     {% set score = submission.scores.get(category, none) %}
@@ -71,11 +84,14 @@
                                         {% for model in submission.models %}
                                         <span class="badge bg-info">{{ model }}</span>
                                         {% endfor %}
+                                        {% if not submission.models %}
+                                        <span class="text-muted">N/A</span>
+                                        {% endif %}
                                     </div>
                                 </td>
                                 <td>
                                     <a href="/users/{{ username }}/{{ submission.id }}" class="btn btn-sm btn-primary">
-                                        <i class="fas fa-search-plus me-1"></i> View Detailed Scores
+                                        <i class="fas fa-search-plus me-1"></i> View Details
                                     </a>
                                 </td>
                             </tr>

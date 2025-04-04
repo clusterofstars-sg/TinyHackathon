@@ -75,60 +75,54 @@
                     </div>
                 </div>
 
-                {% if download_stats.scores < download_stats.expected_scores %}
-                <div class="alert alert-warning mt-3" role="alert">
-                    <i class="fas fa-exclamation-triangle me-2"></i>
-                    <strong>Missing score files.</strong> Expected {{ download_stats.expected_scores }} score files ({{ download_stats.submissions }} submissions × 3 models), but found only {{ download_stats.scores }}.
+                {% if download_stats.scores < download_stats.expected_scores %} <div class="alert alert-info mt-3"
+                    role="alert">
+                    <i class="fas fa-info-circle me-2"></i>
+                    <strong>Information:</strong> Found {{ download_stats.scores }} score files out of {{
+                    download_stats.expected_scores }} expected ({{ download_stats.submissions }} submissions × 4 files
+                    per submission).
                     <p class="mt-2">
-                        The score explorer requires files in this structure:
+                        This is normal as some submissions haven't been scored yet. The Score Explorer will not display
+                        these submissions until they have been partially scored.
                     </p>
-                    <pre class="mt-2"><code>score_explorer_data/
-├── downloaded_submissions/
-│   └── [username]/
-│       └── [submission_id].csv  # CSV with prompts and completions
-└── scores/
-    └── [username]/
-        └── [submission_id]/
-            └── [model_name].csv  # CSV with scores</code></pre>
-                </div>
-                {% endif %}
+                    {% endif %}
 
-                {% if scored_submissions %}
-                <div class="content-section mt-4">
-                    <h3>Downloaded Submissions</h3>
-                    <div class="table-responsive">
-                        <table class="table table-hover table-sm">
-                            <thead class="table-light">
-                                <tr>
-                                    <th>Username</th>
-                                    <th>Submission</th>
-                                    <th>Models</th>
-                                    <th>Action</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for username, submissions in scored_submissions.items() %}
-                                {% for submission_id, submission_info in submissions.items() %}
-                                <tr>
-                                    <td>{{ username }}</td>
-                                    <td>{{ submission_id }}</td>
-                                    <td>
-                                        <span class="badge bg-info">{{ submission_info.models|length }}</span>
-                                    </td>
-                                    <td>
-                                        <a href="/users/{{ username }}/{{ submission_id }}"
-                                            class="btn btn-sm btn-primary">
-                                            <i class="fas fa-eye me-1"></i> View
-                                        </a>
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                                {% endfor %}
-                            </tbody>
-                        </table>
+                    {% if scored_submissions %}
+                    <div class="content-section mt-4">
+                        <h3>Downloaded Submissions</h3>
+                        <div class="table-responsive">
+                            <table class="table table-hover table-sm">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Username</th>
+                                        <th>Submission</th>
+                                        <th>Models</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for username, submissions in scored_submissions.items() %}
+                                    {% for submission_id, submission_info in submissions.items() %}
+                                    <tr>
+                                        <td>{{ username }}</td>
+                                        <td>{{ submission_id }}</td>
+                                        <td>
+                                            <span class="badge bg-info">{{ submission_info.models|length }}</span>
+                                        </td>
+                                        <td>
+                                            <a href="/users/{{ username }}/{{ submission_id }}"
+                                                class="btn btn-sm btn-primary">
+                                                <i class="fas fa-eye me-1"></i> View
+                                            </a>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
-                </div>
-                {% endif %}
+                    {% endif %}
             </div>
         </div>
     </div>
@@ -138,7 +132,7 @@
 {% block extra_js %}
 <script>
     // Hide the loading overlay when the download page is fully loaded
-    document.addEventListener('DOMContentLoaded', function() {
+    document.addEventListener('DOMContentLoaded', function () {
         if (typeof hideDownloadOverlay === 'function') {
             hideDownloadOverlay();
         }
