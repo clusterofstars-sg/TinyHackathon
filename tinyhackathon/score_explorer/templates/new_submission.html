@@ -363,12 +363,51 @@
 
     .prompt-text,
     .completion-text {
-        max-height: 150px;
-        overflow-y: auto;
         padding: 8px;
         background-color: #f8f9fa;
         border-radius: 4px;
-        white-space: pre-wrap;
+    }
+    
+    /* Styling for paragraphs added by JavaScript */
+    .prompt-text p,
+    .completion-text p {
+        margin: 0 0 0.8rem 0;
+    }
+    
+    .prompt-text p:last-child,
+    .completion-text p:last-child {
+        margin-bottom: 0;
     }
 </style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Function to convert text with newlines to paragraphs
+        function formatTextWithParagraphs(element) {
+            if (!element) return;
+            
+            const originalText = element.textContent;
+            if (!originalText.trim()) return;
+            
+            // Split by newlines
+            const paragraphs = originalText.split('\n');
+            let html = '';
+            
+            // Convert each line to a paragraph
+            paragraphs.forEach(function(para) {
+                if (para.trim()) {
+                    html += '<p>' + para.trim() + '</p>';
+                }
+            });
+            
+            // Update the element with formatted HTML
+            element.innerHTML = html;
+        }
+        
+        // Process all prompt and completion elements
+        document.querySelectorAll('.prompt-text, .completion-text').forEach(formatTextWithParagraphs);
+    });
+</script>
 {% endblock %}

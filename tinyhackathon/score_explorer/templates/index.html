@@ -42,7 +42,8 @@
                                 <i class="fas fa-users fa-2x mb-1 text-primary"></i>
                                 <h5 class="mb-0">Explore Users</h5>
                                 <p class="small mb-1">Browse submissions by user</p>
-                                <a href="/users" class="btn btn-primary btn-sm{% if not has_data %} disabled{% endif %}">
+                                <a href="/users"
+                                    class="btn btn-primary btn-sm{% if not has_data %} disabled{% endif %}">
                                     <i class="fas fa-user me-1"></i> View Users
                                 </a>
                                 {% if not has_data %}
@@ -76,7 +77,7 @@
                                 <i class="fas fa-info-circle fa-2x mb-1 text-primary"></i>
                                 <h5 class="mb-0">About</h5>
                                 <p class="small mb-1">Learn about the project</p>
-                                <a href="https://github.com/cluster-of-stars/TinyHackathon" target="_blank"
+                                <a href="https://github.com/clusterofstars-sg/TinyHackathon" target="_blank"
                                     class="btn btn-primary btn-sm">
                                     <i class="fab fa-github me-1"></i> GitHub
                                 </a>
@@ -132,14 +133,16 @@
                                 <td><a href="/users/{{ row.username }}">{{ row.username }}</a></td>
                                 <td>{{ row.num_models }}</td>
                                 <td class="fw-bold">
-                                    <span class="badge bg-{{ 'success' if row.overall >= 3.5 else 'primary' if row.overall >= 2.5 else 'warning' }}">
+                                    <span
+                                        class="badge bg-{{ 'success' if row.overall >= 3.5 else 'primary' if row.overall >= 2.5 else 'warning' }}">
                                         {{ "%.2f"|format(row.overall|float) }}
                                     </span>
                                 </td>
                                 {% for column in ['grammar', 'coherence', 'creativity', 'consistency', 'plot'] %}
                                 {% if column in row %}
                                 <td>
-                                    <span class="badge bg-{{ 'success' if row[column] >= 3.5 else 'primary' if row[column] >= 2.5 else 'warning' }}">
+                                    <span
+                                        class="badge bg-{{ 'success' if row[column] >= 3.5 else 'primary' if row[column] >= 2.5 else 'warning' }}">
                                         {{ "%.2f"|format(row[column]|float) }}
                                     </span>
                                 </td>
@@ -149,10 +152,13 @@
                                 {% endfor %}
                                 <td><code>{{ row.submission_id }}</code></td>
                                 <td>{{ row.submission_count }}</td>
-                                <td><span class="badge bg-{{ 'primary' if row.weight_class == 'large' else 'success' if row.weight_class == 'medium' else 'warning' }}">{{ row.weight_class|title }}</span></td>
+                                <td><span
+                                        class="badge bg-{{ 'primary' if row.weight_class == 'large' else 'success' if row.weight_class == 'medium' else 'warning' }}">{{
+                                        row.weight_class|title }}</span></td>
                                 <td class="text-end">
                                     {% if row.username and row.submission_id %}
-                                    <a href="/users/{{ row.username }}/{{ row.submission_id }}" class="btn btn-sm btn-primary">
+                                    <a href="/users/{{ row.username }}/{{ row.submission_id }}"
+                                        class="btn btn-sm btn-primary">
                                         <i class="fas fa-eye"></i>
                                     </a>
                                     {% endif %}
