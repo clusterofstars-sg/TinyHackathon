@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import score_badge %}
 
 {% block title %}Compare Scores - TinyHackathon Score Explorer{% endblock %}
 
@@ -62,10 +63,7 @@
                                             {% set score = evaluation.scores.get(category, 'N/A') %}
                                             <td>
                                                 {% if score != 'N/A' and score is not none %}
-                                                <span
-                                                    class="badge bg-{{ 'success' if score >= 3.5 else 'primary' if score >= 2.5 else 'warning' }}">
-                                                    {{ score|round(1) }}
-                                                </span>
+                                                {{ score_badge(score) }}
                                                 {% else %}
                                                 <span class="badge bg-secondary">{{ score }}</span>
                                                 {% endif %}
@@ -74,10 +72,7 @@
                                         <td>
                                             {% set model_avg = evaluation.average_score %}
                                             {% if model_avg is not none %}
-                                                <span
-                                                    class="badge bg-{{ 'success' if model_avg >= 3.5 else 'primary' if model_avg >= 2.5 else 'warning' }}">
-                                                    {{ model_avg }}
-                                                </span>
+                                                {{ score_badge(model_avg) }}
                                             {% else %}
                                                 <span class="badge bg-secondary">N/A</span>
                                             {% endif %}
@@ -91,10 +86,7 @@
                                             {% set cat_avg = category_averages.get(category) %}
                                             <td>
                                                 {% if cat_avg is not none %}
-                                                <span
-                                                    class="badge bg-{{ 'success' if cat_avg >= 3.5 else 'primary' if cat_avg >= 2.5 else 'warning' }}">
-                                                    {{ cat_avg }}
-                                                </span>
+                                                {{ score_badge(cat_avg) }}
                                                 {% else %}
                                                  <span class="badge bg-secondary">N/A</span>
                                                 {% endif %}
@@ -103,10 +95,7 @@
 
                                         <td>
                                             {% if overall_average is not none %}
-                                            <span
-                                                class="badge bg-{{ 'success' if overall_average >= 3.5 else 'primary' if overall_average >= 2.5 else 'warning' }}">
-                                                {{ overall_average }}
-                                            </span>
+                                            {{ score_badge(overall_average) }}
                                             {% else %}
                                                 <span class="badge bg-secondary">N/A</span>
                                             {% endif %}

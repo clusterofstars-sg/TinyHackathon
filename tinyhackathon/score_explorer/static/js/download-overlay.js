@@ -15,13 +15,26 @@ document.addEventListener('DOMContentLoaded', function() {
  * Initialize the download loading overlay functionality
  */
 function initDownloadOverlay() {
-    // Get all download links (both regular download and refresh download)
-    const downloadLinks = document.querySelectorAll('a[href^="/download"]');
+    // Get all download links from the home page (initial download)
+    const homeDownloadLinks = document.querySelectorAll('a[href="/download"]');
     
-    // Add click event listener to each download link
-    downloadLinks.forEach(link => {
+    // Get refresh links from the download page
+    const refreshLinks = document.querySelectorAll('a[href*="refresh=true"]');
+    
+    // Add click event listener to home download links
+    homeDownloadLinks.forEach(link => {
+        // Only add the event listener if we're on the home page
+        // This prevents showing the overlay when clicking the navbar link on other pages
+        if (window.location.pathname === '/' || window.location.pathname === '/index.html') {
+            link.addEventListener('click', function(event) {
+                showDownloadOverlay();
+            });
+        }
+    });
+    
+    // Add click event listener to refresh links
+    refreshLinks.forEach(link => {
         link.addEventListener('click', function(event) {
-            // Show loading overlay
             showDownloadOverlay();
         });
     });

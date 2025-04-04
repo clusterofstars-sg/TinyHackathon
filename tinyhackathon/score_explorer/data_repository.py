@@ -472,25 +472,35 @@ def compute_user_stats() -> pd.DataFrame:
         scored_count = len(scored_submissions)
         unscored_count = len(unscored_submissions)
 
-        # Get the best submission (first in the sorted list of scored submissions)
-        best_submission = scored_submissions[0] if scored_submissions else None
+        # Find the best submission by score
+        best_submission = None
         best_score = None
-
-        if best_submission:
-            # Try to find best score from leaderboard or calculate from data
-            leaderboards = get_all_leaderboards()
-            global_leaderboard = leaderboards.get("global")
-
-            if global_leaderboard is not None and "username" in global_leaderboard.columns:
-                user_row = global_leaderboard[global_leaderboard["username"] == username]
-                if not user_row.empty and "score" in user_row.columns:
-                    best_score = user_row["score"].values[0]
-
-            # If not found in leaderboard, calculate from submission data
-            if best_score is None and best_submission:
-                df = get_cached_submission_data(username, best_submission)
+        
+        # First try to find best score from global leaderboard
+        leaderboards = get_all_leaderboards()
+        global_leaderboard = leaderboards.get("global")
+        
+        if global_leaderboard is not None and "username" in global_leaderboard.columns:
+            user_rows = global_leaderboard[global_leaderboard["username"] == username]
+            if not user_rows.empty and "score" in user_rows.columns:
+                # Get the row with the highest score
+                best_row = user_rows.loc[user_rows["score"].idxmax()]
+                best_score = best_row["score"]
+                if "submission" in best_row:
+                    best_submission = best_row["submission"]
+        
+        # If not found in leaderboard or missing submission ID, check each submission
+        if best_score is None or best_submission is None:
+            for submission_id in scored_submissions:
+                df = get_cached_submission_data(username, submission_id)
                 if not df.empty and "overall" in df.columns:
-                    best_score = df["overall"].mean()
+                    # Filter out rows with "No scores available"
+                    numeric_df = df[df["overall"] != "No scores available"]
+                    if not numeric_df.empty:
+                        submission_score = numeric_df["overall"].mean()
+                        if best_score is None or submission_score > best_score:
+                            best_score = submission_score
+                            best_submission = submission_id
 
         user_stats.append({
             "username": username, 

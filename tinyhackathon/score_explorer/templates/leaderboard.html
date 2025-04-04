@@ -1,8 +1,33 @@
 {% extends "base.html" %}
+{% from "macros.html" import score_badge %}
 
 {% block title %}{{ board_type|title }} Leaderboard - TinyHackathon Score Explorer{% endblock %}
 
 {% block content %}
+<style>
+    /* Improved table spacing for leaderboard */
+    .table-responsive {
+        overflow-x: auto;
+    }
+
+    .table th {
+        white-space: nowrap;
+        padding: 0.6rem 0.5rem;
+        border-bottom: 2px solid #dee2e6;
+    }
+
+    .table td {
+        padding: 0.6rem 0.5rem;
+        vertical-align: middle;
+    }
+
+    /* Add some spacing between columns */
+    .table th,
+    .table td {
+        min-width: 80px;
+    }
+</style>
+
 <div class="row justify-content-center">
     <div class="col-md-12">
         <div class="card">
@@ -26,10 +51,11 @@
                                 <th>Rank</th>
                                 <th>User</th>
                                 {% for col in columns %}
-                                {% if col not in ['rank', 'username'] %}
+                                {% if col not in ['rank', 'username', 'is_partially_scored', 'num_models'] %}
                                 <th class="text-capitalize">{{ col.replace('_', ' ') }}</th>
                                 {% endif %}
                                 {% endfor %}
+                                <th>Status</th>
                                 <th class="text-end">View</th>
                             </tr>
                         </thead>
@@ -37,27 +63,41 @@
                             {% for row in leaderboard %}
                             <tr>
                                 <td class="fw-bold">{{ loop.index }}</td>
-                                <td><a href="/users/{{ row.username }}">{{ row.username }}</a></td>
-                                {% for col in columns %}
-                                {% if col not in ['rank', 'username'] %}
                                 <td>
-                                    {% if col == 'score' or col == 'overall' %}
-                                    <span class="badge bg-{{ 'success' if row[col]|float >= 3.5 else 'primary' if row[col]|float >= 2.5 else 'warning' }}">
-                                        {{ "%.2f"|format(row[col]|float) }}
-                                    </span>
+                                    <a href="/users/{{ row.username }}">{{ row.username }}</a>
+                                </td>
+                                {% for col in columns %}
+                                {% if col not in ['rank', 'username', 'is_partially_scored', 'num_models'] %}
+                                <td>
+                                    {% if col == 'score' %}
+                                    {% if row.score %}
+                                    {{ score_badge(row.score) }}
+                                    {% else %}
+                                    <span class="text-muted">-</span>
+                                    {% endif %}
                                     {% elif col in ['grammar', 'coherence', 'creativity', 'consistency', 'plot'] %}
-                                    <span class="badge bg-{{ 'success' if row[col]|float >= 3.5 else 'primary' if row[col]|float >= 2.5 else 'warning' }}">
-                                        {{ "%.2f"|format(row[col]|float) }}
-                                    </span>
+                                    {% if row[col] %}
+                                    {{ score_badge(row[col]) }}
+                                    {% else %}
+                                    <span class="text-muted">-</span>
+                                    {% endif %}
                                     {% else %}
                                     {{ row[col] }}
                                     {% endif %}
                                 </td>
                                 {% endif %}
                                 {% endfor %}
+                                <td>
+                                    {% if row.is_partially_scored %}
+                                    <span class="badge bg-info">Partial</span>
+                                    {% else %}
+                                    <span class="badge bg-success">Scored</span>
+                                    {% endif %}
+                                </td>
                                 <td class="text-end">
                                     {% if 'submission_id' in row and row.submission_id %}
-                                    <a href="/users/{{ row.username }}/{{ row.submission_id }}" class="btn btn-sm btn-primary">
+                                    <a href="/users/{{ row.username }}/{{ row.submission_id }}"
+                                        class="btn btn-sm btn-primary">
                                         <i class="fas fa-eye me-1"></i> View
                                     </a>
                                     {% else %}
@@ -75,4 +115,30 @@
         </div>
     </div>
 </div>
+
+{% block extra_js %}
+<script>
+    // Initialize tooltips
+    document.addEventListener('DOMContentLoaded', function () {
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl)
+        });
+    });
+</script>
+{% endblock %}
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Ensure Font Awesome icons are displayed properly */
+    .fas,
+    .fab {
+        display: inline-block !important;
+        font-style: normal !important;
+        font-variant: normal !important;
+        text-rendering: auto !important;
+        line-height: 1 !important;
+    }
+</style>
 {% endblock %}

@@ -1,8 +1,122 @@
 {% extends "base.html" %}
+{% from "macros.html" import score_badge %}
 
 {% block title %}Home - TinyHackathon Score Explorer{% endblock %}
 
 {% block content %}
+<style>
+    /* Leaderboard table styling */
+    .leaderboard-table {
+        width: 100%;
+    }
+
+    /* Use fixed layout for wider screens */
+    @media (min-width: 1200px) {
+        .leaderboard-table {
+            table-layout: fixed;
+        }
+    }
+
+    /* Use auto layout for narrower screens */
+    @media (max-width: 1199px) {
+        .leaderboard-table {
+            table-layout: auto;
+        }
+    }
+
+    /* Fixed column widths for consistent alignment */
+    .leaderboard-table th.col-rank,
+    .leaderboard-table td.col-rank {
+        width: 4%;
+        text-align: center;
+    }
+
+    .leaderboard-table th.col-user,
+    .leaderboard-table td.col-user {
+        width: 8%;
+    }
+
+    .leaderboard-table th.col-submission,
+    .leaderboard-table td.col-submission {
+        width: 12%;
+    }
+
+    .leaderboard-table th.col-submissions,
+    .leaderboard-table td.col-submissions {
+        width: 8%;
+        text-align: center;
+    }
+
+    .leaderboard-table th.col-date,
+    .leaderboard-table td.col-date {
+        width: 10%;
+    }
+
+    .leaderboard-table th.col-class,
+    .leaderboard-table td.col-class {
+        width: 5%;
+    }
+
+    .leaderboard-table th.col-status,
+    .leaderboard-table td.col-status {
+        width: 5%;
+        text-align: center;
+    }
+
+    .leaderboard-table th.col-score,
+    .leaderboard-table td.col-score {
+        width: 6%;
+        text-align: center;
+    }
+
+    .leaderboard-table th.col-grammar,
+    .leaderboard-table td.col-grammar {
+        width: 7%;
+        text-align: center;
+    }
+
+    .leaderboard-table th.col-coherence,
+    .leaderboard-table td.col-coherence {
+        width: 7%;
+        text-align: center;
+    }
+
+    .leaderboard-table th.col-creativity,
+    .leaderboard-table td.col-creativity {
+        width: 7%;
+        text-align: center;
+    }
+
+    .leaderboard-table th.col-consistency,
+    .leaderboard-table td.col-consistency {
+        width: 7%;
+        text-align: center;
+    }
+
+    .leaderboard-table th.col-plot,
+    .leaderboard-table td.col-plot {
+        width: 6%;
+        text-align: center;
+    }
+
+    .leaderboard-table th.col-actions,
+    .leaderboard-table td.col-actions {
+        width: 6.5%;
+        text-align: center;
+    }
+
+    /* Fix header text wrapping */
+    .leaderboard-table th {
+        white-space: nowrap;
+        overflow: visible;
+        padding: 0.6rem 0.4rem;
+    }
+
+    /* Adjust cell padding for more spacing */
+    .leaderboard-table td {
+        padding: 0.6rem 0.4rem;
+    }
+</style>
 <div class="row justify-content-center">
     <div class="col-md-12">
         <div class="card">
@@ -72,7 +186,7 @@
                                 <p class="small mb-1">Learn about the hackathon</p>
                                 <a href="https://github.com/clusterofstars-sg/TinyHackathon" target="_blank"
                                     class="btn btn-primary btn-sm">
-                                    <i class="fas fa-github me-1"></i> GitHub Repository
+                                    <i class="fab fa-github me-1"></i> GitHub Repository
                                 </a>
                             </div>
                         </div>
@@ -87,36 +201,42 @@
                     </div>
                     <div class="card-body p-2">
                         <div class="table-responsive">
-                            <table class="table table-hover table-striped table-sm mb-0">
+                            <table class="table table-hover table-striped table-sm mb-0 leaderboard-table">
                                 <thead class="table-primary">
                                     <tr>
-                                        <th>Rank</th>
-                                        <th>User</th>
-                                        <th>Submission</th>
-                                        <th>Submission Count</th>
-                                        <th>Submission Date</th>
-                                        <th>Weight Class</th>
-                                        <th>Num Models</th>
-                                        <th>Score</th>
+                                        <th class="col-rank">Rank</th>
+                                        <th class="col-user">User</th>
+                                        <th class="col-submission">Submission</th>
+                                        <th class="col-submissions text-center">Submissions</th>
+                                        <th class="col-date">Date</th>
+                                        <th class="col-class">Class</th>
+                                        <th class="col-status">Status</th>
+                                        <th class="col-score">Score</th>
                                         {% if global_leaderboard|length > 0 %}
-                                        {% if 'grammar' in global_leaderboard[0] %}<th>Grammar</th>{% endif %}
-                                        {% if 'coherence' in global_leaderboard[0] %}<th>Coherence</th>{% endif %}
-                                        {% if 'creativity' in global_leaderboard[0] %}<th>Creativity</th>{% endif %}
-                                        {% if 'consistency' in global_leaderboard[0] %}<th>Consistency</th>{% endif %}
-                                        {% if 'plot' in global_leaderboard[0] %}<th>Plot</th>{% endif %}
+                                        {% if 'grammar' in global_leaderboard[0] %}<th class="col-grammar">Grammar</th>
                                         {% endif %}
-                                        <th>Actions</th>
+                                        {% if 'coherence' in global_leaderboard[0] %}<th class="col-coherence">Coherence
+                                        </th>{% endif %}
+                                        {% if 'creativity' in global_leaderboard[0] %}<th class="col-creativity">
+                                            Creativity</th>{% endif %}
+                                        {% if 'consistency' in global_leaderboard[0] %}<th class="col-consistency">
+                                            Consistency</th>{% endif %}
+                                        {% if 'plot' in global_leaderboard[0] %}<th class="col-plot">Plot</th>{% endif
+                                        %}
+                                        {% endif %}
+                                        <th class="col-actions">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {% for row in global_leaderboard %}
                                     <tr>
-                                        <td class="fw-bold">{{ loop.index }}</td>
-                                        <td><a href="/users/{{ row.username }}">{{ row.username }}</a></td>
-                                        <td><code>{{ row.submission_id }}</code></td>
-                                        <td>{{ row.submission_count }}</td>
-                                        <td>{{ row.submission_date }}</td>
-                                        <td>
+                                        <td class="col-rank fw-bold">{{ loop.index }}</td>
+                                        <td class="col-user"><a href="/users/{{ row.username }}">{{ row.username }}</a>
+                                        </td>
+                                        <td class="col-submission"><code>{{ row.submission_id }}</code></td>
+                                        <td class="col-submissions">{{ row.submission_count }}</td>
+                                        <td class="col-date">{{ row.submission_date }}</td>
+                                        <td class="col-class">
                                             {% if 'weight_class' in row %}
                                             {{ row.weight_class|capitalize }}
                                             {% elif 'model_size' in row %}
@@ -125,54 +245,66 @@
                                             -
                                             {% endif %}
                                         </td>
-                                        <td>{{ row.num_models }}</td>
-                                        <td class="fw-bold">
-                                            <span
-                                                class="badge bg-{{ 'success' if row.overall >= 3.5 else 'primary' if row.overall >= 2.5 else 'warning' }}">
-                                                {{ "%.2f"|format(row.overall|float) }}
-                                            </span>
+                                        <td class="col-status">
+                                            {% if row.is_partially_scored %}
+                                            <span class="badge bg-info">Partial</span>
+                                            {% else %}
+                                            <span class="badge bg-success">Scored</span>
+                                            {% endif %}
+                                        </td>
+                                        <td class="col-score fw-bold">
+                                            {% if row.overall %}
+                                            {{ score_badge(row.overall) }}
+                                            {% else %}
+                                            <span class="text-muted">-</span>
+                                            {% endif %}
                                         </td>
                                         {% if 'grammar' in row %}
-                                        <td>
-                                            <span
-                                                class="badge bg-{{ 'success' if row.grammar >= 3.5 else 'primary' if row.grammar >= 2.5 else 'warning' }}">
-                                                {{ "%.2f"|format(row.grammar|float) }}
-                                            </span>
+                                        <td class="col-grammar">
+                                            {% if row.grammar %}
+                                            {{ score_badge(row.grammar) }}
+                                            {% else %}
+                                            <span class="text-muted">-</span>
+                                            {% endif %}
                                         </td>
                                         {% endif %}
                                         {% if 'coherence' in row %}
-                                        <td>
-                                            <span
-                                                class="badge bg-{{ 'success' if row.coherence >= 3.5 else 'primary' if row.coherence >= 2.5 else 'warning' }}">
-                                                {{ "%.2f"|format(row.coherence|float) }}
-                                            </span>
+                                        <td class="col-coherence">
+                                            {% if row.coherence %}
+                                            {{ score_badge(row.coherence) }}
+                                            {% else %}
+                                            <span class="text-muted">-</span>
+                                            {% endif %}
                                         </td>
                                         {% endif %}
                                         {% if 'creativity' in row %}
-                                        <td>
-                                            <span
-                                                class="badge bg-{{ 'success' if row.creativity >= 3.5 else 'primary' if row.creativity >= 2.5 else 'warning' }}">
-                                                {{ "%.2f"|format(row.creativity|float) }}
-                                            </span>
+                                        <td class="col-creativity">
+                                            {% if row.creativity %}
+                                            {{ score_badge(row.creativity) }}
+                                            {% else %}
+                                            <span class="text-muted">-</span>
+                                            {% endif %}
                                         </td>
                                         {% endif %}
                                         {% if 'consistency' in row %}
-                                        <td>
-                                            <span
-                                                class="badge bg-{{ 'success' if row.consistency >= 3.5 else 'primary' if row.consistency >= 2.5 else 'warning' }}">
-                                                {{ "%.2f"|format(row.consistency|float) }}
-                                            </span>
+                                        <td class="col-consistency">
+                                            {% if row.consistency %}
+                                            {{ score_badge(row.consistency) }}
+                                            {% else %}
+                                            <span class="text-muted">-</span>
+                                            {% endif %}
                                         </td>
                                         {% endif %}
                                         {% if 'plot' in row %}
-                                        <td>
-                                            <span
-                                                class="badge bg-{{ 'success' if row.plot >= 3.5 else 'primary' if row.plot >= 2.5 else 'warning' }}">
-                                                {{ "%.2f"|format(row.plot|float) }}
-                                            </span>
+                                        <td class="col-plot">
+                                            {% if row.plot %}
+                                            {{ score_badge(row.plot) }}
+                                            {% else %}
+                                            <span class="text-muted">-</span>
+                                            {% endif %}
                                         </td>
                                         {% endif %}
-                                        <td class="text-end">
+                                        <td class="col-actions text-end">
                                             <a href="/users/{{ row.username }}/{{ row.submission_id }}"
                                                 class="btn btn-sm btn-primary">
                                                 <i class="fas fa-eye me-1"></i> View
@@ -197,4 +329,18 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Ensure Font Awesome icons are displayed properly */
+    .fas,
+    .fab {
+        display: inline-block !important;
+        font-style: normal !important;
+        font-variant: normal !important;
+        text-rendering: auto !important;
+        line-height: 1 !important;
+    }
+</style>
 {% endblock %}

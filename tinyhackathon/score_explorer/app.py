@@ -72,7 +72,34 @@ async def home(request: Request):
             leaderboards = get_all_leaderboards()
             if "global" in leaderboards:
                 # Get top 5 rows of the leaderboard
-                global_leaderboard = leaderboards["global"].head(5).to_dict(orient="records")
+                leaderboard_df = leaderboards["global"].head(5)
+
+                # Add is_partially_scored flag to each row
+                global_leaderboard = []
+                for _, row in leaderboard_df.iterrows():
+                    row_dict = row.to_dict()
+
+                    # Check if this submission has been partially scored
+                    if "username" in row_dict and "submission_id" in row_dict:
+                        username = row_dict["username"]
+                        submission_id = row_dict["submission_id"]
+
+                        # Get the score directory and check how many model files it has
+                        score_dir = find_score_directory(username, submission_id)
+                        if score_dir:
+                            # Count model CSV files (excluding summary and history files)
+                            model_csvs = [
+                                csv_file
+                                for csv_file in score_dir.glob("*.csv")
+                                if csv_file.name not in ["submission_summary.csv", "score_history.csv"]
+                            ]
+                            row_dict["is_partially_scored"] = len(model_csvs) < 3
+                        else:
+                            row_dict["is_partially_scored"] = False
+                    else:
+                        row_dict["is_partially_scored"] = False
+
+                    global_leaderboard.append(row_dict)
 
                 # Debug: Print the keys in the first row
                 if global_leaderboard and len(global_leaderboard) > 0:
@@ -232,12 +259,12 @@ async def list_user_submissions(request: Request, username: str):
         submission_data = []
         scored_count = 0
         unscored_count = 0
-        
+
         for submission_id in submissions:
             # Check if this submission has score files
             score_dir = find_score_directory(username, submission_id)
             is_scored = score_dir is not None
-            
+
             if is_scored:
                 scored_count += 1
             else:
@@ -247,14 +274,20 @@ async def list_user_submissions(request: Request, username: str):
                 if not submission_csv:
                     # Skip this submission if the CSV doesn't exist
                     continue
-            
+
             # Get data for each submission
             df = get_cached_submission_data(username, submission_id)
-            
+
             # Get model names if available
             models = []
-            if not df.empty and "model_name" in df.columns:
-                # Filter out "No scores available" placeholder
+            if is_scored and score_dir:
+                # Get model names directly from CSV files in the score directory
+                model_csvs = [
+                    csv_file for csv_file in score_dir.glob("*.csv") if csv_file.name not in ["submission_summary.csv", "score_history.csv"]
+                ]
+                models = [csv_file.stem for csv_file in model_csvs]
+            elif not df.empty and "model_name" in df.columns:
+                # Fallback to DataFrame if needed
                 model_names = df["model_name"].unique().tolist()
                 models = [m for m in model_names if m != "No scores available"]
 
@@ -271,7 +304,10 @@ async def list_user_submissions(request: Request, username: str):
                     if category in df.columns:
                         # Only include real scores, not NaN placeholders
                         if is_scored:
-                            category_scores[category] = df[category].mean()
+                            # Filter out NaN values before calculating mean
+                            valid_scores = df[df[category].notna()][category]
+                            if not valid_scores.empty:
+                                category_scores[category] = valid_scores.mean()
 
                 # If no scores found, use the calculate_dataframe_averages function
                 if not category_scores and "model_name" in df.columns and is_scored:
@@ -294,30 +330,28 @@ async def list_user_submissions(request: Request, username: str):
             # For backward compatibility
             avg_score = category_scores.get("overall") if category_scores else None
 
-            submission_data.append({
-                "submission_id": submission_id, 
-                "is_scored": is_scored,
-                "average_score": avg_score, 
-                "category_scores": category_scores,
-                "models": models
-            })
+            submission_data.append(
+                {
+                    "submission_id": submission_id,
+                    "is_scored": is_scored,
+                    "average_score": avg_score,
+                    "category_scores": category_scores,
+                    "models": models,
+                }
+            )
 
-        # Sort submissions by overall score (highest first), then by submission_id (most recent first)
-        submission_data = sorted(
-            submission_data, 
-            key=lambda x: (x["average_score"] if x["average_score"] is not None else -float("inf"), x["submission_id"]), 
-            reverse=True
-        )
+        # Sort submissions by submission_id (most recent first)
+        submission_data = sorted(submission_data, key=lambda x: x["submission_id"], reverse=True)
 
         return templates.TemplateResponse(
-            "submissions.html", 
+            "submissions.html",
             {
-                "request": request, 
-                "username": username, 
+                "request": request,
+                "username": username,
                 "submissions": submission_data,
                 "scored_count": scored_count,
-                "unscored_count": unscored_count
-            }
+                "unscored_count": unscored_count,
+            },
         )
     except Exception as e:
         logger.exception(f"Error in list_user_submissions: {e}")
@@ -539,12 +573,60 @@ async def view_leaderboard(request: Request, board_type: str):
         if leaderboard_df is None:
             return templates.TemplateResponse("error.html", {"request": request, "message": f"Leaderboard {board_type} not found"})
 
-        # Convert DataFrame to list of dictionaries for the template
-        leaderboard_data = leaderboard_df.to_dict(orient="records")
+        # Add is_partially_scored flag to each row
+        leaderboard_data = []
+        for _, row in leaderboard_df.iterrows():
+            row_dict = row.to_dict()
+
+            # Check if this submission has been partially scored
+            if "username" in row_dict and "submission_id" in row_dict:
+                username = row_dict["username"]
+                submission_id = row_dict["submission_id"]
+
+                # Get the score directory and check how many model files it has
+                score_dir = find_score_directory(username, submission_id)
+                if score_dir:
+                    # Count model CSV files (excluding summary and history files)
+                    model_csvs = [
+                        csv_file
+                        for csv_file in score_dir.glob("*.csv")
+                        if csv_file.name not in ["submission_summary.csv", "score_history.csv"]
+                    ]
+                    row_dict["is_partially_scored"] = len(model_csvs) < 3
+                else:
+                    row_dict["is_partially_scored"] = False
+            else:
+                row_dict["is_partially_scored"] = False
+
+            leaderboard_data.append(row_dict)
+
+        # Rename columns for better display in UI
+        column_mapping = {
+            "submission_count": "Submissions",
+            "submission_date": "Date",
+            "weight_class": "Class"
+        }
+
+        # Apply column renames if needed
+        for old_name, new_name in column_mapping.items():
+            if old_name in leaderboard_df.columns:
+                # Create a new column list with the renamed columns
+                columns = []
+                for col in leaderboard_df.columns:
+                    if col == old_name:
+                        columns.append(new_name)
+                    else:
+                        columns.append(col)
+                leaderboard_df.columns = columns
+
+                # Update the column name in each data item
+                for item in leaderboard_data:
+                    if old_name in item:
+                        item[new_name] = item.pop(old_name)
 
         return templates.TemplateResponse(
             "leaderboard.html",
-            {"request": request, "board_type": board_type, "leaderboard": leaderboard_data, "columns": leaderboard_df.columns.tolist()},
+            {"request": request, "board_type": board_type, "leaderboard": leaderboard_data, "columns": list(leaderboard_df.columns)},
         )
     except Exception as e:
         logger.exception(f"Error in view_leaderboard: {e}")
@@ -561,10 +643,60 @@ async def view_all_leaderboards(request: Request):
         if not leaderboards:
             return templates.TemplateResponse("error.html", {"request": request, "message": "No leaderboards found"})
 
-        # Convert each DataFrame to list of dictionaries
+        # Convert each DataFrame to list of dictionaries and add is_partially_scored flag
         leaderboard_data = {}
         for board_name, df in leaderboards.items():
-            leaderboard_data[board_name] = {"data": df.to_dict(orient="records"), "columns": df.columns.tolist()}
+            processed_data = []
+            for _, row in df.iterrows():
+                row_dict = row.to_dict()
+
+                # Check if this submission has been partially scored
+                if "username" in row_dict and "submission_id" in row_dict:
+                    username = row_dict["username"]
+                    submission_id = row_dict["submission_id"]
+
+                    # Get the score directory and check how many model files it has
+                    score_dir = find_score_directory(username, submission_id)
+                    if score_dir:
+                        # Count model CSV files (excluding summary and history files)
+                        model_csvs = [
+                            csv_file
+                            for csv_file in score_dir.glob("*.csv")
+                            if csv_file.name not in ["submission_summary.csv", "score_history.csv"]
+                        ]
+                        row_dict["is_partially_scored"] = len(model_csvs) < 3
+                    else:
+                        row_dict["is_partially_scored"] = False
+                else:
+                    row_dict["is_partially_scored"] = False
+
+                processed_data.append(row_dict)
+
+            leaderboard_data[board_name] = {"data": processed_data, "columns": list(df.columns) + ["is_partially_scored"]}
+
+            # Rename columns for better display in UI
+            column_mapping = {
+                "submission_count": "Submissions",
+                "submission_date": "Date",
+                "weight_class": "Class"
+            }
+
+            # Apply column renames if needed
+            for old_name, new_name in column_mapping.items():
+                if old_name in leaderboard_data[board_name]["columns"]:
+                    # Create a new column list with the renamed columns
+                    columns = []
+                    for col in leaderboard_data[board_name]["columns"]:
+                        if col == old_name:
+                            columns.append(new_name)
+                        else:
+                            columns.append(col)
+                    leaderboard_data[board_name]["columns"] = columns
+
+                    # Update the column name in each data item
+                    for item in leaderboard_data[board_name]["data"]:
+                        if old_name in item:
+                            item[new_name] = item.pop(old_name)
 
         return templates.TemplateResponse(
             "all_leaderboards.html",
