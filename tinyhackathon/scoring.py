@@ -2713,5 +2713,126 @@ def cleanup(
             console.print(f"[yellow]Skipping {path} - not found[/yellow]")
 
 
+@app.command()
+def regenerate(
+    submissions_dir: Annotated[Optional[Path], typer.Option(help="Directory containing submissions")] = None,
+    scores_dir: Annotated[Optional[Path], typer.Option(help="Directory to save scoring results")] = None,
+    upload: Annotated[bool, typer.Option(help="Upload results to HF repo")] = False,
+    mode: Annotated[bool, typer.Option("--submit/--test", help="Submit to production (--submit) or test environment (--test). Defaults to test mode.")] = False,
+    sub_test: Annotated[Optional[bool], typer.Option("--sub-test/--sub-prod", help="Override submission repository selection (test or prod). If not specified, follows the main mode.")] = None,
+    score_test: Annotated[Optional[bool], typer.Option("--score-test/--score-prod", help="Override score repository selection (test or prod). If not specified, follows the main mode.")] = None,
+    config: Annotated[Optional[Path], typer.Option(callback=conf_callback, is_eager=True, help="Relative path to YAML config file for setting options. Passing CLI options will supersede config options.", case_sensitive=False)] = None,
+):  # fmt: skip
+    """Regenerate submission summaries, score history, and leaderboards from existing score CSVs.
+
+    This command downloads the current score CSVs, recalculates all summaries and leaderboards,
+    and optionally uploads the updated files without performing any new scoring.
+
+    Parameters:
+        submissions_dir: Directory containing submissions
+        scores_dir: Directory to save scoring results
+        upload: Whether to upload results to Hugging Face
+        mode: Submit to production or test environment
+        sub_test/sub_prod: Override submission repository selection
+        score_test/score_prod: Override score repository selection
+        config: Path to configuration file for setting options
+    """
+    try:
+        # Step 1: Set up environment (with empty model_dirs since we're not scoring)
+        env_config, _, _ = setup_environment(mode=mode, sub_test=sub_test, score_test=score_test, model_dir="fake", model_dirs=None)
+
+        # Step 2: Set up API client for uploads
+        api_client = setup_api_client(upload=upload)
+
+        # Set final upload flag based on API client availability
+        can_upload = upload and api_client is not None
+
+        # Set up input and output directories
+        submission_dir = submissions_dir or env_config.submission_dir
+        scores_dir_path = scores_dir or env_config.scores_dir
+
+        # Step 3: Download submissions and scores
+        download_result = download_submissions_and_scores(
+            env_config=env_config, submission_dir=submission_dir, scores_dir=scores_dir_path, api_client=api_client if can_upload else None
+        )
+
+        # Step 4: Find all scored submissions
+        console.print("[bold blue]Finding all scored submissions...[/bold blue]")
+        scored_submissions = set()
+        all_submissions = get_all_scored_submissions(base_dir=scores_dir_path)
+
+        for username, submissions in all_submissions["scored_submissions"].items():
+            for submission_id in submissions:
+                scored_submissions.add((username, submission_id))
+
+        if not scored_submissions:
+            console.print("[yellow]No scored submissions found. Exiting.[/yellow]")
+            return
+
+        console.print(f"[green]Found {len(scored_submissions)} scored submissions.[/green]")
+
+        # Step 5: Generate summaries and update history for all submissions
+        console.print("[bold blue]Regenerating summaries and history files...[/bold blue]")
+        summary_results = generate_summaries_and_history(
+            scored_submissions=scored_submissions,
+            scores_dir=scores_dir_path,
+            overwrite=True,
+            repo_id=env_config.scores_repo_id if can_upload else None,
+        )
+
+        # Step 6: Generate and optionally upload leaderboards
+        console.print("[bold blue]Regenerating leaderboards...[/bold blue]")
+        leaderboard_results = generate_and_upload_leaderboards(
+            scores_dir=scores_dir_path,
+            leaderboard_dir="leaderboards",
+            upload=can_upload,
+            api_client=api_client,
+            repo_id=env_config.scores_repo_id,
+            update_readme=can_upload,
+            force_readme_update=True,  # Force README update since we're regenerating everything
+        )
+
+        # Step 7: Upload user score files if requested
+        upload_stats = {}
+        if can_upload and scored_submissions:
+            console.print("[bold blue]Uploading regenerated files...[/bold blue]")
+            upload_stats = upload_results(
+                scored_submissions=scored_submissions,
+                scores_dir=scores_dir_path,
+                repo_id=env_config.scores_repo_id,
+                api_client=api_client,
+            )
+
+        # Print summary of results
+        console.print("\n[bold blue]===== Regeneration Process Complete =====[/bold blue]")
+        console.print(f"[blue]Environment: {'Production' if mode else 'Test'}[/blue]")
+        console.print(f"[blue]Submissions Repository: {env_config.submissions_repo_id}[/blue]")
+        console.print(f"[blue]Scores Repository: {env_config.scores_repo_id}[/blue]")
+        console.print(f"[blue]Total submissions processed: {len(scored_submissions)}[/blue]")
+        console.print(f"[blue]Generated {len(summary_results['summary_files'])} summary files[/blue]")
+        console.print(f"[blue]Updated {len(summary_results['history_files'])} history files[/blue]")
+
+        if leaderboard_results.get("leaderboard") is not None:
+            weight_class_count = len(leaderboard_results.get("weight_class_leaderboards", {}))
+            console.print(f"[blue]Generated global leaderboard and {weight_class_count} weight class leaderboards[/blue]")
+
+            if can_upload:
+                upload_stats_lb = leaderboard_results.get("upload_stats", {})
+                console.print(f"[blue]Uploaded {upload_stats_lb.get('files', 0)} leaderboard files[/blue]")
+                if leaderboard_results.get("readme_updated", False):
+                    console.print("[blue]Updated repository README with latest leaderboards[/blue]")
+
+        if can_upload and upload_stats:
+            console.print(f"[blue]Uploaded {upload_stats.get('files', 0)} user score files[/blue]")
+
+        console.print("[green]Regeneration process completed successfully[/green]")
+
+    except Exception as e:
+        console.print(f"[red]Error in regeneration process: {e}[/red]")
+        import traceback
+
+        console.print(traceback.format_exc())
+
+
 if __name__ == "__main__":
     app()
