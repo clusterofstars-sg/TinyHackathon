@@ -1,0 +1,413 @@
+{% extends "base.html" %}
+
+{% block title %}{{ username }}'s Submission - TinyHackathon Score Explorer{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h2 class="mb-0">
+                        <i class="fas fa-file-alt me-2"></i>{{ username }}'s Submission: {{ submission_id }}
+                    </h2>
+                    <a href="/users/{{ username }}" class="btn btn-sm btn-outline-light">
+                        <i class="fas fa-arrow-left me-1"></i> Back to Submissions
+                    </a>
+                </div>
+            </div>
+            <div class="card-body p-2">
+                <!-- Overall Submission Scores -->
+                <div class="card mb-2">
+                    <div class="card-header bg-light py-2">
+                        <h3 class="h5 mb-0"><i class="fas fa-chart-bar me-2"></i>Overall Submission Scores</h3>
+                    </div>
+                    <div class="card-body p-2">
+                        <div class="table-responsive">
+                            <table class="table table-bordered table-sm table-hover mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th scope="col">Model</th>
+                                        <th scope="col">Overall</th>
+                                        {% for category in categories %}
+                                        {% if category != "overall" %}
+                                        <th scope="col">{{ category|title }}</th>
+                                        {% endif %}
+                                        {% endfor %}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for model_name, scores in model_averages.items() %}
+                                    <tr>
+                                        <th scope="row">{{ model_name }}</th>
+                                        {% if "overall" in scores %}
+                                        <td class="fw-bold">
+                                            <span
+                                                class="badge bg-{{ 'success' if scores.overall >= 3.5 else 'primary' if scores.overall >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(scores.overall) }}
+                                            </span>
+                                        </td>
+                                        {% else %}
+                                        <td>-</td>
+                                        {% endif %}
+                                        {% for category in categories %}
+                                        {% if category != "overall" and category in scores %}
+                                        {% set score = scores[category] %}
+                                        <td>
+                                            <span
+                                                class="badge bg-{{ 'success' if score >= 3.5 else 'primary' if score >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(score) }}
+                                            </span>
+                                        </td>
+                                        {% elif category != "overall" %}
+                                        <td>-</td>
+                                        {% endif %}
+                                        {% endfor %}
+                                    </tr>
+                                    {% endfor %}
+
+                                    <!-- Average row across all models -->
+                                    <tr class="table-light">
+                                        <th scope="row">Average</th>
+                                        {% if "overall" in submission_averages %}
+                                        <td class="fw-bold">
+                                            <span
+                                                class="badge bg-{{ 'success' if submission_averages.overall >= 3.5 else 'primary' if submission_averages.overall >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(submission_averages.overall) }}
+                                            </span>
+                                        </td>
+                                        {% else %}
+                                        <td>-</td>
+                                        {% endif %}
+                                        {% for category in categories %}
+                                        {% if category != "overall" and category in submission_averages %}
+                                        {% set avg = submission_averages[category] %}
+                                        <td>
+                                            <span
+                                                class="badge bg-{{ 'success' if avg >= 3.5 else 'primary' if avg >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(avg) }}
+                                            </span>
+                                        </td>
+                                        {% elif category != "overall" %}
+                                        <td>-</td>
+                                        {% endif %}
+                                        {% endfor %}
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Search and Sort Controls -->
+                <div class="card mb-2">
+                    <div class="card-header bg-light py-2">
+                        <h3 class="h5 mb-0"><i class="fas fa-search me-2"></i>Search and Filter Items</h3>
+                    </div>
+                    <div class="card-body p-2">
+                        <form action="/users/{{ username }}/{{ submission_id }}" method="get" class="row g-2">
+                            <!-- Search input -->
+                            <div class="col-md-5">
+                                <div class="input-group">
+                                    <span class="input-group-text"><i class="fas fa-search"></i></span>
+                                    <input type="text" class="form-control" name="search"
+                                        placeholder="Search prompts and completions..." value="{{ search }}">
+                                </div>
+                            </div>
+                            <!-- Sort options -->
+                            <div class="col-md-7">
+                                <div class="row g-2">
+                                    <div class="col-auto">
+                                        <select class="form-select" name="sort">
+                                            <option value="id" selected>Sort By ID</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-auto">
+                                        <select class="form-select" name="sort_order">
+                                            <option value="asc" {% if current_sort_order=="asc" or not current_sort_order or current_sort_order=="desc" %}selected{% endif %}>Ascending</option>
+                                            <option value="desc" {% if current_sort_order=="desc" and false %}selected{% endif %}>Descending</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-auto">
+                                        <input type="hidden" name="items_per_page" value="{{ items_per_page }}">
+                                        <button type="submit" class="btn btn-primary">Apply</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </form>
+                        <div class="mt-2">
+                            <small class="text-muted">Showing {{ story_ids|length }} of {{ total_items }} items (Page {{
+                                current_page }} of {{ total_pages }})</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Pagination and Story Navigation -->
+                <div class="card mb-2">
+                    <div class="card-header bg-light py-2">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h3 class="h5 mb-0"><i class="fas fa-list me-2"></i>Items</h3>
+                            <div>
+                                <div class="btn-group">
+                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&page=1&search={{ search }}"
+                                        class="btn btn-sm btn-outline-secondary {% if current_page == 1 %}disabled{% endif %}">
+                                        <i class="fas fa-angle-double-left"></i>
+                                    </a>
+                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&page={{ current_page - 1 }}&search={{ search }}"
+                                        class="btn btn-sm btn-outline-secondary {% if current_page == 1 %}disabled{% endif %}">
+                                        <i class="fas fa-angle-left"></i>
+                                    </a>
+                                    <span class="btn btn-sm btn-outline-secondary">Page {{ current_page }} of {{
+                                        total_pages }}</span>
+                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&page={{ current_page + 1 }}&search={{ search }}"
+                                        class="btn btn-sm btn-outline-secondary {% if current_page == total_pages %}disabled{% endif %}">
+                                        <i class="fas fa-angle-right"></i>
+                                    </a>
+                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&page={{ total_pages }}&search={{ search }}"
+                                        class="btn btn-sm btn-outline-secondary {% if current_page == total_pages %}disabled{% endif %}">
+                                        <i class="fas fa-angle-double-right"></i>
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body p-2">
+                        <div class="item-grid">
+                            {% for story_id in story_ids %}
+                            {% set overall_score = avg_scores[story_id].overall|float if story_id in avg_scores and 'overall' in avg_scores[story_id] else 0 %}
+                            {% if overall_score >= 3.5 %}
+                                {% set color = "bg-success" %}
+                            {% elif overall_score >= 2.5 %}
+                                {% set color = "bg-primary" %}
+                            {% else %}
+                                {% set color = "bg-warning" %}
+                            {% endif %}
+                            <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&page={{ current_page }}&search={{ search }}&item_id={{ story_id }}{% if current_item is not none %}&prev_item={{ prev_item }}&next_item={{ next_item }}{% endif %}"
+                                class="item-badge {% if story_id == current_item %}selected{% endif %}"
+                                data-id="{{ story_id }}">
+                                <span class="badge rounded-pill {{ color }}">
+                                    {{ "%.2f"|format(overall_score) }}
+                                </span>
+                                <span class="item-id">Item #{{ story_id }}</span>
+                            </a>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Next/Prev Item Navigation -->
+                <div class="d-flex align-items-center justify-content-between my-2">
+                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&search={{ search }}&item_id={{ prev_item }}"
+                        class="btn btn-sm btn-outline-primary {% if prev_item is none %}disabled{% endif %}">
+                        <i class="fas fa-chevron-left"></i> Previous Item
+                    </a>
+                    {% if current_item is not none %}
+                    <span class="badge bg-dark">Item #{{ current_item }}</span>
+                    {% endif %}
+                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&search={{ search }}&item_id={{ next_item }}"
+                        class="btn btn-sm btn-outline-primary {% if next_item is none %}disabled{% endif %}">
+                        Next Item <i class="fas fa-chevron-right"></i>
+                    </a>
+                </div>
+
+                <!-- Current Prompt and Completion -->
+                {% if current_item is not none %}
+                <div class="card mb-2">
+                    <div class="card-header bg-light py-2">
+                        <h3 class="h5 mb-0"><i class="fas fa-file-alt me-2"></i>Item #{{ current_item }} Content</h3>
+                    </div>
+                    <div class="card-body p-2">
+                        <h4 class="h6 mb-1"><i class="fas fa-question-circle me-2"></i>Prompt</h4>
+                        <div class="prompt-text mb-2">{{ prompt }}</div>
+
+                        <h4 class="h6 mb-1"><i class="fas fa-comment-dots me-2"></i>Completion</h4>
+                        <div class="completion-text">{{ completion }}</div>
+                    </div>
+                </div>
+
+                <!-- Score Comparison for Current Item -->
+                <div class="card mb-0">
+                    <div class="card-header bg-light py-2">
+                        <h3 class="h5 mb-0"><i class="fas fa-chart-bar me-2"></i>Score Comparison for Item #{{
+                            current_item }}</h3>
+                    </div>
+                    <div class="card-body p-2">
+                        <div class="table-responsive">
+                            <table class="table table-bordered table-sm table-hover mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th scope="col">Model</th>
+                                        <th scope="col">Overall</th>
+                                        {% for category in categories %}
+                                        {% if category != "overall" %}
+                                        <th scope="col">{{ category|title }}</th>
+                                        {% endif %}
+                                        {% endfor %}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for evaluation in evaluations %}
+                                    <tr>
+                                        <th scope="row">{{ evaluation.model_name }}</th>
+                                        {% if "overall" in evaluation.scores %}
+                                        <td class="fw-bold">
+                                            <span
+                                                class="badge bg-{{ 'success' if evaluation.scores.overall >= 3.5 else 'primary' if evaluation.scores.overall >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(evaluation.scores.overall) }}
+                                            </span>
+                                        </td>
+                                        {% else %}
+                                        <td>-</td>
+                                        {% endif %}
+                                        {% for category in categories %}
+                                        {% if category != "overall" and category in evaluation.scores %}
+                                        {% set score = evaluation.scores[category] %}
+                                        <td>
+                                            <span
+                                                class="badge bg-{{ 'success' if score >= 3.5 else 'primary' if score >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(score) }}
+                                            </span>
+                                        </td>
+                                        {% elif category != "overall" %}
+                                        <td>-</td>
+                                        {% endif %}
+                                        {% endfor %}
+                                    </tr>
+                                    {% endfor %}
+
+                                    <!-- Average row -->
+                                    <tr class="table-light">
+                                        <th scope="row">Average</th>
+                                        {% if item_averages and "overall" in item_averages %}
+                                        <td class="fw-bold">
+                                            <span
+                                                class="badge bg-{{ 'success' if item_averages.overall >= 3.5 else 'primary' if item_averages.overall >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(item_averages.overall) }}
+                                            </span>
+                                        </td>
+                                        {% else %}
+                                        <td>-</td>
+                                        {% endif %}
+                                        {% for category in categories %}
+                                        {% if category != "overall" and item_averages and category in item_averages %}
+                                        {% set score = item_averages[category] %}
+                                        <td>
+                                            <span
+                                                class="badge bg-{{ 'success' if score >= 3.5 else 'primary' if score >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(score) }}
+                                            </span>
+                                        </td>
+                                        {% elif category != "overall" %}
+                                        <td>-</td>
+                                        {% endif %}
+                                        {% endfor %}
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                {% else %}
+                <div class="alert alert-warning">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    {% if search %}
+                    No items found matching your search criteria. Please try a different search term.
+                    {% else %}
+                    No items found. The dataset may be empty.
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .item-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 5px;
+    }
+
+    .item-badge {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 5px;
+        border-radius: 5px;
+        background-color: #f8f9fa;
+        text-decoration: none;
+        color: #212529;
+        transition: all 0.2s;
+    }
+
+    .item-badge:hover {
+        background-color: #e9ecef;
+        text-decoration: none;
+    }
+
+    .item-badge.selected {
+        background-color: #6c757d;
+        color: white;
+        font-weight: bold;
+        box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+    }
+
+    .item-id {
+        margin-top: 3px;
+        font-size: 0.7rem;
+    }
+
+    .prompt-text,
+    .completion-text {
+        padding: 8px;
+        background-color: #f8f9fa;
+        border-radius: 4px;
+    }
+    
+    /* Styling for paragraphs added by JavaScript */
+    .prompt-text p,
+    .completion-text p {
+        margin: 0 0 0.8rem 0;
+    }
+    
+    .prompt-text p:last-child,
+    .completion-text p:last-child {
+        margin-bottom: 0;
+    }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Function to convert text with newlines to paragraphs
+        function formatTextWithParagraphs(element) {
+            if (!element) return;
+            
+            const originalText = element.textContent;
+            if (!originalText.trim()) return;
+            
+            // Split by newlines
+            const paragraphs = originalText.split('\n');
+            let html = '';
+            
+            // Convert each line to a paragraph
+            paragraphs.forEach(function(para) {
+                if (para.trim()) {
+                    html += '<p>' + para.trim() + '</p>';
+                }
+            });
+            
+            // Update the element with formatted HTML
+            element.innerHTML = html;
+        }
+        
+        // Process all prompt and completion elements
+        document.querySelectorAll('.prompt-text, .completion-text').forEach(formatTextWithParagraphs);
+    });
+</script>
+{% endblock %}

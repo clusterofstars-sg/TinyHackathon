@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}{{ board_type|title }} Leaderboard - TinyHackathon Score Explorer{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <h2 class="mb-0"><i class="fas fa-trophy me-2"></i>{{ board_type|title }} Leaderboard</h2>
+                <a href="/leaderboards" class="btn btn-sm btn-light">
+                    <i class="fas fa-list me-1"></i> All Leaderboards
+                </a>
+            </div>
+            <div class="card-body p-2">
+                <div class="content-section mb-3">
+                    <p class="lead mb-0">
+                        Showing the {{ board_type|title }} leaderboard for the TinyHackathon.
+                    </p>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="table table-hover table-striped table-sm mb-0">
+                        <thead class="table-primary">
+                            <tr>
+                                <th>Rank</th>
+                                <th>User</th>
+                                {% for col in columns %}
+                                {% if col not in ['rank', 'username'] %}
+                                <th class="text-capitalize">{{ col.replace('_', ' ') }}</th>
+                                {% endif %}
+                                {% endfor %}
+                                <th class="text-end">View</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in leaderboard %}
+                            <tr>
+                                <td class="fw-bold">{{ loop.index }}</td>
+                                <td><a href="/users/{{ row.username }}">{{ row.username }}</a></td>
+                                {% for col in columns %}
+                                {% if col not in ['rank', 'username'] %}
+                                <td>
+                                    {% if col == 'score' or col == 'overall' %}
+                                    <span class="badge bg-{{ 'success' if row[col]|float >= 3.5 else 'primary' if row[col]|float >= 2.5 else 'warning' }}">
+                                        {{ "%.2f"|format(row[col]|float) }}
+                                    </span>
+                                    {% elif col in ['grammar', 'coherence', 'creativity', 'consistency', 'plot'] %}
+                                    <span class="badge bg-{{ 'success' if row[col]|float >= 3.5 else 'primary' if row[col]|float >= 2.5 else 'warning' }}">
+                                        {{ "%.2f"|format(row[col]|float) }}
+                                    </span>
+                                    {% else %}
+                                    {{ row[col] }}
+                                    {% endif %}
+                                </td>
+                                {% endif %}
+                                {% endfor %}
+                                <td class="text-end">
+                                    {% if 'submission_id' in row and row.submission_id %}
+                                    <a href="/users/{{ row.username }}/{{ row.submission_id }}" class="btn btn-sm btn-primary">
+                                        <i class="fas fa-eye me-1"></i> View
+                                    </a>
+                                    {% else %}
+                                    <a href="/users/{{ row.username }}" class="btn btn-sm btn-primary">
+                                        <i class="fas fa-user me-1"></i> Profile
+                                    </a>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

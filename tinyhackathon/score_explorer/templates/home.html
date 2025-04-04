@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+
+{% block title %}Home - TinyHackathon Score Explorer{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header">
+                <h2 class="mb-0"><i class="fas fa-chart-bar me-2"></i>TinyHackathon Score Explorer</h2>
+            </div>
+            <div class="card-body">
+                <div class="content-section">
+                    <h3>Welcome to the TinyHackathon Score Explorer</h3>
+                    <p class="lead">
+                        Explore submissions and scores from the TinyHackathon, with merged prompts and completions for
+                        better analysis.
+                    </p>
+                    <p>
+                        This tool allows you to download submissions and scores, and view them in a user-friendly
+                        interface.
+                        You can see how different judges scored the same completion, and compare scores across users.
+                    </p>
+                </div>
+
+                <div class="row mt-3">
+                    <div class="col-md-3">
+                        <div class="card">
+                            <div class="card-body text-center py-2">
+                                <i class="fas fa-download fa-2x mb-1 text-primary"></i>
+                                <h5 class="mb-0">Download Data</h5>
+                                <p class="small mb-1">Get submissions and scores</p>
+                                <a href="/download" class="btn btn-primary btn-sm">
+                                    <i class="fas fa-cloud-download-alt me-1"></i> Download
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card">
+                            <div class="card-body text-center py-2">
+                                <i class="fas fa-users fa-2x mb-1 text-primary"></i>
+                                <h5 class="mb-0">Explore Users</h5>
+                                <p class="small mb-1">Browse submissions by user</p>
+                                <a href="/users"
+                                    class="btn btn-primary btn-sm{% if not has_users %} disabled{% endif %}">
+                                    <i class="fas fa-user me-1"></i> View Users
+                                </a>
+                                {% if not has_users %}
+                                <div class="mt-1 small text-muted">Download data first</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card">
+                            <div class="card-body text-center py-2">
+                                <i class="fas fa-trophy fa-2x mb-1 text-primary"></i>
+                                <h5 class="mb-0">Leaderboards</h5>
+                                <p class="small mb-1">View global & model leaderboards</p>
+                                <a href="/leaderboards" class="btn btn-primary btn-sm">
+                                    <i class="fas fa-list-ol me-1"></i> View Leaderboards
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card">
+                            <div class="card-body text-center py-2">
+                                <i class="fas fa-info-circle fa-2x mb-1 text-primary"></i>
+                                <h5 class="mb-0">About</h5>
+                                <p class="small mb-1">Learn about the hackathon</p>
+                                <a href="https://github.com/clusterofstars-sg/TinyHackathon" target="_blank"
+                                    class="btn btn-primary btn-sm">
+                                    <i class="fas fa-github me-1"></i> GitHub Repository
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {% if global_leaderboard %}
+                <div class="card mb-4">
+                    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                        <h3 class="mb-0"><i class="fas fa-trophy me-2"></i>Global Leaderboard</h3>
+                        <a href="/leaderboards" class="btn btn-sm btn-light">View All</a>
+                    </div>
+                    <div class="card-body p-2">
+                        <div class="table-responsive">
+                            <table class="table table-hover table-striped table-sm mb-0">
+                                <thead class="table-primary">
+                                    <tr>
+                                        <th>Rank</th>
+                                        <th>User</th>
+                                        <th>Submission</th>
+                                        <th>Submission Count</th>
+                                        <th>Submission Date</th>
+                                        <th>Weight Class</th>
+                                        <th>Num Models</th>
+                                        <th>Score</th>
+                                        {% if global_leaderboard|length > 0 %}
+                                        {% if 'grammar' in global_leaderboard[0] %}<th>Grammar</th>{% endif %}
+                                        {% if 'coherence' in global_leaderboard[0] %}<th>Coherence</th>{% endif %}
+                                        {% if 'creativity' in global_leaderboard[0] %}<th>Creativity</th>{% endif %}
+                                        {% if 'consistency' in global_leaderboard[0] %}<th>Consistency</th>{% endif %}
+                                        {% if 'plot' in global_leaderboard[0] %}<th>Plot</th>{% endif %}
+                                        {% endif %}
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for row in global_leaderboard %}
+                                    <tr>
+                                        <td class="fw-bold">{{ loop.index }}</td>
+                                        <td><a href="/users/{{ row.username }}">{{ row.username }}</a></td>
+                                        <td><code>{{ row.submission_id }}</code></td>
+                                        <td>{{ row.submission_count }}</td>
+                                        <td>{{ row.submission_date }}</td>
+                                        <td>
+                                            {% if 'weight_class' in row %}
+                                            {{ row.weight_class|capitalize }}
+                                            {% elif 'model_size' in row %}
+                                            {{ row.model_size|capitalize }}
+                                            {% else %}
+                                            -
+                                            {% endif %}
+                                        </td>
+                                        <td>{{ row.num_models }}</td>
+                                        <td class="fw-bold">
+                                            <span
+                                                class="badge bg-{{ 'success' if row.overall >= 3.5 else 'primary' if row.overall >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(row.overall|float) }}
+                                            </span>
+                                        </td>
+                                        {% if 'grammar' in row %}
+                                        <td>
+                                            <span
+                                                class="badge bg-{{ 'success' if row.grammar >= 3.5 else 'primary' if row.grammar >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(row.grammar|float) }}
+                                            </span>
+                                        </td>
+                                        {% endif %}
+                                        {% if 'coherence' in row %}
+                                        <td>
+                                            <span
+                                                class="badge bg-{{ 'success' if row.coherence >= 3.5 else 'primary' if row.coherence >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(row.coherence|float) }}
+                                            </span>
+                                        </td>
+                                        {% endif %}
+                                        {% if 'creativity' in row %}
+                                        <td>
+                                            <span
+                                                class="badge bg-{{ 'success' if row.creativity >= 3.5 else 'primary' if row.creativity >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(row.creativity|float) }}
+                                            </span>
+                                        </td>
+                                        {% endif %}
+                                        {% if 'consistency' in row %}
+                                        <td>
+                                            <span
+                                                class="badge bg-{{ 'success' if row.consistency >= 3.5 else 'primary' if row.consistency >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(row.consistency|float) }}
+                                            </span>
+                                        </td>
+                                        {% endif %}
+                                        {% if 'plot' in row %}
+                                        <td>
+                                            <span
+                                                class="badge bg-{{ 'success' if row.plot >= 3.5 else 'primary' if row.plot >= 2.5 else 'warning' }}">
+                                                {{ "%.2f"|format(row.plot|float) }}
+                                            </span>
+                                        </td>
+                                        {% endif %}
+                                        <td class="text-end">
+                                            <a href="/users/{{ row.username }}/{{ row.submission_id }}"
+                                                class="btn btn-sm btn-primary">
+                                                <i class="fas fa-eye me-1"></i> View
+                                            </a>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if not has_users %}
+                <div class="alert alert-warning mt-4" role="alert">
+                    <i class="fas fa-exclamation-triangle me-2"></i> No data has been downloaded yet. Please <a
+                        href="/download" class="alert-link">download data</a> to explore submissions and scores.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block title %}Compare Scores - TinyHackathon Score Explorer{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h2 class="mb-0">
+                        <i class="fas fa-balance-scale me-2"></i>Compare Scores - Item #{{ item_id }}
+                    </h2>
+                    <a href="/users/{{ username }}/{{ submission_id }}" class="btn btn-sm btn-outline-light">
+                        <i class="fas fa-arrow-left me-1"></i> Back to Submission
+                    </a>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="content-section">
+                    <p class="lead">
+                        Comparing evaluation scores for the same prompt across multiple models.
+                    </p>
+                </div>
+
+                <!-- Prompt and Completion -->
+                <div class="card mb-4">
+                    <div class="card-header bg-light">
+                        <h3 class="h5 mb-0"><i class="fas fa-file-alt me-2"></i>Submission Content</h3>
+                    </div>
+                    <div class="card-body">
+                        <h4 class="h5"><i class="fas fa-question-circle me-2"></i>Prompt</h4>
+                        <div class="prompt-text mb-4">{{ prompt }}</div>
+
+                        <h4 class="h5"><i class="fas fa-comment-dots me-2"></i>Completion</h4>
+                        <div class="completion-text">{{ completion }}</div>
+                    </div>
+                </div>
+
+                <!-- Score Comparison -->
+                <div class="card">
+                    <div class="card-header bg-light">
+                        <h3 class="h5 mb-0"><i class="fas fa-chart-bar me-2"></i>Score Comparison</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-bordered">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th scope="col">Model</th>
+                                        {% for category in score_categories %}
+                                        <th scope="col">{{ category.title() }}</th>
+                                        {% endfor %}
+                                        <th scope="col">Model Average</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for evaluation in evaluations %}
+                                    <tr>
+                                        <th scope="row">{{ evaluation.model_name }}</th>
+                                        {% for category in score_categories %}
+                                            {% set score = evaluation.scores.get(category, 'N/A') %}
+                                            <td>
+                                                {% if score != 'N/A' and score is not none %}
+                                                <span
+                                                    class="badge bg-{{ 'success' if score >= 3.5 else 'primary' if score >= 2.5 else 'warning' }}">
+                                                    {{ score|round(1) }}
+                                                </span>
+                                                {% else %}
+                                                <span class="badge bg-secondary">{{ score }}</span>
+                                                {% endif %}
+                                            </td>
+                                        {% endfor %}
+                                        <td>
+                                            {% set model_avg = evaluation.average_score %}
+                                            {% if model_avg is not none %}
+                                                <span
+                                                    class="badge bg-{{ 'success' if model_avg >= 3.5 else 'primary' if model_avg >= 2.5 else 'warning' }}">
+                                                    {{ model_avg }}
+                                                </span>
+                                            {% else %}
+                                                <span class="badge bg-secondary">N/A</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                    {% if evaluations %}
+                                    <tr class="table-light">
+                                        <th scope="row">Average</th>
+                                        {% for category in score_categories %}
+                                            {% set cat_avg = category_averages.get(category) %}
+                                            <td>
+                                                {% if cat_avg is not none %}
+                                                <span
+                                                    class="badge bg-{{ 'success' if cat_avg >= 3.5 else 'primary' if cat_avg >= 2.5 else 'warning' }}">
+                                                    {{ cat_avg }}
+                                                </span>
+                                                {% else %}
+                                                 <span class="badge bg-secondary">N/A</span>
+                                                {% endif %}
+                                            </td>
+                                        {% endfor %}
+
+                                        <td>
+                                            {% if overall_average is not none %}
+                                            <span
+                                                class="badge bg-{{ 'success' if overall_average >= 3.5 else 'primary' if overall_average >= 2.5 else 'warning' }}">
+                                                {{ overall_average }}
+                                            </span>
+                                            {% else %}
+                                                <span class="badge bg-secondary">N/A</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endif %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
