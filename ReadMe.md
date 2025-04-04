@@ -58,6 +58,19 @@ Set `submission-name` to optionally give your submission a human-friendly identi
 
 During the weekend of April 12-13th, we will upload the final submission dataset. You will only submit one version with your best model's completions. These will be different prompts from the evaluation dataset.
 
+## Running the Score Explorer Web Application
+
+To run the Score Explorer web application locally:
+
+1. Make sure you have all dependencies installed
+2. Run the following command from the project root:
+
+```bash
+python tinyhackathon/score_explorer/run.py
+```
+
+3. Open your browser and navigate to `http://localhost:8001`
+
 ## Setup LLM Evaluation
 
  ```bash
@@ -77,3 +90,5 @@ uv sync --dev
 # Install flash attention if you have a Ampere (RTX 30xx series) or newer GPU
 uv sync --dev --extra flash --no-cache
 ```
+
+*Note: This application is over 90% vibecoded - because sometimes the best code comes from pure vibes and good LLMs.*
