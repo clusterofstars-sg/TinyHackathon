@@ -17,58 +17,6 @@
                 </div>
             </div>
             <div class="card-body p-2">
-                <!-- Search and Sort Controls -->
-                <div class="card mb-2">
-                    <div class="card-header bg-light py-2">
-                        <h3 class="h5 mb-0"><i class="fas fa-search me-2"></i>Search and Filter Items</h3>
-                    </div>
-                    <div class="card-body p-2">
-                        <form action="/users/{{ username }}/{{ submission_id }}" method="get" class="row g-2">
-                            <!-- Search input -->
-                            <div class="col-md-5">
-                                <div class="input-group">
-                                    <span class="input-group-text"><i class="fas fa-search"></i></span>
-                                    <input type="text" class="form-control" name="search"
-                                        placeholder="Search prompts and completions..." value="{{ search }}">
-                                </div>
-                            </div>
-                            <!-- Sort options -->
-                            <div class="col-md-7">
-                                <div class="row g-2">
-                                    <div class="col-auto">
-                                        <select class="form-select" name="sort">
-                                            <option value="id" {% if current_sort=="id" %}selected{% endif %}>Sort By ID
-                                            </option>
-                                            <option value="score" {% if current_sort=="score" %}selected{% endif %}>Sort
-                                                By Score</option>
-                                        </select>
-                                    </div>
-                                    <div class="col-auto">
-                                        <select class="form-select" name="sort_category">
-                                            <option value="overall" {% if current_sort_category=="overall" %}selected{%
-                                                endif %}>Overall Score</option>
-                                            {% for category in categories %}
-                                            {% if category != "overall" %}
-                                            <option value="{{ category }}" {% if current_sort_category==category
-                                                %}selected{% endif %}>{{ category|title }}</option>
-                                            {% endif %}
-                                            {% endfor %}
-                                        </select>
-                                    </div>
-                                    <div class="col-auto">
-                                        <input type="hidden" name="items_per_page" value="{{ items_per_page }}">
-                                        <button type="submit" class="btn btn-primary">Apply</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </form>
-                        <div class="mt-2">
-                            <small class="text-muted">Showing {{ story_ids|length }} of {{ total_items }} items (Page {{
-                                current_page }} of {{ total_pages }})</small>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- Overall Submission Scores -->
                 <div class="card mb-2">
                     <div class="card-header bg-light py-2">
@@ -151,6 +99,49 @@
                     </div>
                 </div>
 
+                <!-- Search and Sort Controls -->
+                <div class="card mb-2">
+                    <div class="card-header bg-light py-2">
+                        <h3 class="h5 mb-0"><i class="fas fa-search me-2"></i>Search and Filter Items</h3>
+                    </div>
+                    <div class="card-body p-2">
+                        <form action="/users/{{ username }}/{{ submission_id }}" method="get" class="row g-2">
+                            <!-- Search input -->
+                            <div class="col-md-5">
+                                <div class="input-group">
+                                    <span class="input-group-text"><i class="fas fa-search"></i></span>
+                                    <input type="text" class="form-control" name="search"
+                                        placeholder="Search prompts and completions..." value="{{ search }}">
+                                </div>
+                            </div>
+                            <!-- Sort options -->
+                            <div class="col-md-7">
+                                <div class="row g-2">
+                                    <div class="col-auto">
+                                        <select class="form-select" name="sort">
+                                            <option value="id" selected>Sort By ID</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-auto">
+                                        <select class="form-select" name="sort_order">
+                                            <option value="asc" {% if current_sort_order=="asc" or not current_sort_order or current_sort_order=="desc" %}selected{% endif %}>Ascending</option>
+                                            <option value="desc" {% if current_sort_order=="desc" and false %}selected{% endif %}>Descending</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-auto">
+                                        <input type="hidden" name="items_per_page" value="{{ items_per_page }}">
+                                        <button type="submit" class="btn btn-primary">Apply</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </form>
+                        <div class="mt-2">
+                            <small class="text-muted">Showing {{ story_ids|length }} of {{ total_items }} items (Page {{
+                                current_page }} of {{ total_pages }})</small>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Pagination and Story Navigation -->
                 <div class="card mb-2">
                     <div class="card-header bg-light py-2">
@@ -158,21 +149,21 @@
                             <h3 class="h5 mb-0"><i class="fas fa-list me-2"></i>Items</h3>
                             <div>
                                 <div class="btn-group">
-                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page=1&search={{ search }}"
+                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&page=1&search={{ search }}"
                                         class="btn btn-sm btn-outline-secondary {% if current_page == 1 %}disabled{% endif %}">
                                         <i class="fas fa-angle-double-left"></i>
                                     </a>
-                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page={{ current_page - 1 }}&search={{ search }}"
+                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&page={{ current_page - 1 }}&search={{ search }}"
                                         class="btn btn-sm btn-outline-secondary {% if current_page == 1 %}disabled{% endif %}">
                                         <i class="fas fa-angle-left"></i>
                                     </a>
                                     <span class="btn btn-sm btn-outline-secondary">Page {{ current_page }} of {{
                                         total_pages }}</span>
-                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page={{ current_page + 1 }}&search={{ search }}"
+                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&page={{ current_page + 1 }}&search={{ search }}"
                                         class="btn btn-sm btn-outline-secondary {% if current_page == total_pages %}disabled{% endif %}">
                                         <i class="fas fa-angle-right"></i>
                                     </a>
-                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page={{ total_pages }}&search={{ search }}"
+                                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&page={{ total_pages }}&search={{ search }}"
                                         class="btn btn-sm btn-outline-secondary {% if current_page == total_pages %}disabled{% endif %}">
                                         <i class="fas fa-angle-double-right"></i>
                                     </a>
@@ -191,7 +182,7 @@
                             {% else %}
                                 {% set color = "bg-warning" %}
                             {% endif %}
-                            <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&page={{ current_page }}&search={{ search }}&item_id={{ story_id }}{% if current_item is not none %}&prev_item={{ prev_item }}&next_item={{ next_item }}{% endif %}"
+                            <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&page={{ current_page }}&search={{ search }}&item_id={{ story_id }}{% if current_item is not none %}&prev_item={{ prev_item }}&next_item={{ next_item }}{% endif %}"
                                 class="item-badge {% if story_id == current_item %}selected{% endif %}"
                                 data-id="{{ story_id }}">
                                 <span class="badge rounded-pill {{ color }}">
@@ -206,15 +197,15 @@
 
                 <!-- Next/Prev Item Navigation -->
                 <div class="d-flex align-items-center justify-content-between my-2">
-                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&search={{ search }}&item_id={{ prev_item }}"
-                        class="btn btn-sm btn-outline-primary {% if not prev_item %}disabled{% endif %}">
+                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&search={{ search }}&item_id={{ prev_item }}"
+                        class="btn btn-sm btn-outline-primary {% if prev_item is none %}disabled{% endif %}">
                         <i class="fas fa-chevron-left"></i> Previous Item
                     </a>
                     {% if current_item is not none %}
                     <span class="badge bg-dark">Item #{{ current_item }}</span>
                     {% endif %}
-                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&search={{ search }}&item_id={{ next_item }}"
-                        class="btn btn-sm btn-outline-primary {% if not next_item %}disabled{% endif %}">
+                    <a href="/users/{{ username }}/{{ submission_id }}?sort={{ current_sort }}&sort_category={{ current_sort_category }}&sort_order={{ current_sort_order }}&search={{ search }}&item_id={{ next_item }}"
+                        class="btn btn-sm btn-outline-primary {% if next_item is none %}disabled{% endif %}">
                         Next Item <i class="fas fa-chevron-right"></i>
                     </a>
                 </div>
@@ -359,7 +350,7 @@
     }
 
     .item-badge.selected {
-        background-color: #212529;
+        background-color: #6c757d;
         color: white;
         font-weight: bold;
         box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);

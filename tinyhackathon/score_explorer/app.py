@@ -286,6 +286,7 @@ async def view_submission(
     submission_id: str,
     sort: str = "id",
     sort_category: str = "overall",
+    sort_order: str = "asc",
     page: int = 1,
     items_per_page: int = 24,
     search: str = "",
@@ -319,19 +320,10 @@ async def view_submission(
 
         total_items = len(all_story_ids)
 
-        # Apply sorting
-        if sort == "score" and sort_category in categories:
-            # Sort by the specified score category
-            # Create a dictionary mapping item_id to the score for the specified category
-            category_scores = {}
-            for item_id in all_story_ids:
-                item_data = df[df["item_id"] == item_id]
-                if not item_data.empty and sort_category in item_data.columns:
-                    category_scores[item_id] = item_data[sort_category].mean()
-                else:
-                    category_scores[item_id] = 0
-
-            all_story_ids = sorted(all_story_ids, key=lambda sid: category_scores.get(sid, 0), reverse=True)
+        # Apply sorting - only ID sorting is supported
+        # Sort by ID (ascending or descending)
+        reverse_sort = sort_order == "desc"
+        all_story_ids = sorted(all_story_ids, reverse=reverse_sort)
 
         # Calculate pagination
         total_pages = (total_items + items_per_page - 1) // items_per_page  # Ceiling division
@@ -353,14 +345,15 @@ async def view_submission(
                 start_idx = (page - 1) * items_per_page
                 end_idx = min(start_idx + items_per_page, total_items)
                 story_ids = all_story_ids[start_idx:end_idx]
-        else:
-            current_item = story_ids[0] if story_ids else None
+        elif story_ids:  # Make sure we have story IDs before setting a default
+            current_item = story_ids[0]  # Default to first item on the page
 
         # Calculate prev/next items for navigation
         prev_item = None
         next_item = None
         if current_item is not None and all_story_ids:
             current_index = all_story_ids.index(current_item)
+            # Use explicit None check instead of relying on truthiness
             prev_item = all_story_ids[current_index - 1] if current_index > 0 else None
             next_item = all_story_ids[current_index + 1] if current_index < len(all_story_ids) - 1 else None
 
@@ -390,6 +383,7 @@ async def view_submission(
                 "avg_scores": avg_scores_per_item,
                 "current_sort": sort,
                 "current_sort_category": sort_category,
+                "current_sort_order": sort_order,
                 "current_page": page,
                 "total_pages": total_pages,
                 "items_per_page": items_per_page,
