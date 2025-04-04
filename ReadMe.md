@@ -4,7 +4,7 @@
 
 This repository uses [uv](https://docs.astral.sh/uv) to managing dependencies.
 
-After installing uv, you can either install the dependencies by running `uv sync` or by using `uv run` to run the submission script directly.
+After installing uv, you can either install the dependencies by running `uv sync --no-dev` or by using `uv run` to run the submission script directly.
 
 ## Submission Instructions
 
