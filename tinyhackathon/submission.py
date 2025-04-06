@@ -178,7 +178,7 @@ def upload_submission(
         df.to_csv(save_path, index=False)
 
         # Upload to HF
-        remote_path = f"submissions/{username}/{timestamp}.csv"
+        remote_path = f"submissions/{username}/{file_name}"
         api.upload_file(path_or_fileobj=str(save_path), path_in_repo=remote_path, repo_id=hf_repo, repo_type="dataset")
 
         # Handle metadata.json - get existing if we don't have it yet
