@@ -77,16 +77,16 @@ def upload_submission(
     info, api = get_hf_user()
     username = info["name"]
 
+    # Check for daily submission limit using AOE (UTC-12) timezone
+    aoe_timezone = timezone(timedelta(hours=-12))
+    today_aoe = datetime.now(aoe_timezone).date()
+
     # Check if submission already exists for the user
     try:
         repo_files = api.list_repo_files(repo_id=hf_repo, repo_type="dataset")
         user_submissions = [f for f in repo_files if f.startswith(f"submissions/{username}/")]
 
         if user_submissions:
-            # Check for daily submission limit using AOE (UTC-12) timezone
-            aoe_timezone = timezone(timedelta(hours=-12))
-            today_aoe = datetime.now(aoe_timezone).date()
-
             # Parse timestamps from existing submission filenames
             for submission in user_submissions:
                 # Extract timestamp using regex - match YYYY(mm)dd_HHMMSS pattern
