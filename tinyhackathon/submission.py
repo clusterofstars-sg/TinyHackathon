@@ -72,6 +72,7 @@ def upload_submission(
     submission_name: Optional[str] = None,
     weight_class: Optional[WeightClass] = None,
     hf_repo: str = "cluster-of-stars/TinyStoriesHackathon_Submissions",
+    final_submission: bool = False,
 ) -> Dict[str, Any]:
     "Upload a submission to the HF dataset using environment credentials."
     info, api = get_hf_user()
@@ -120,6 +121,18 @@ def upload_submission(
     except Exception as e:
         # Don't prevent submission if we can't check existing submissions
         console.print(f"\n[yellow]Warning: Could not check for existing submissions: {str(e)}[/yellow]")
+
+    # Enforce only one dataset per user in the final submission dataset
+    if final_submission:
+        try:
+            repo_files = api.list_repo_files(repo_id=hf_repo, repo_type="dataset")
+            user_submissions = [f for f in repo_files if f.startswith(f"submissions/{username}/")]
+            if user_submissions:
+                console.print("\n[red]Error: Only one final submission is allowed per user. You have already submitted to the final dataset.[/red]")  # fmt: skip
+                console.print(f"[yellow]Your previous submission(s): {user_submissions}[/yellow]")
+                raise typer.Exit()
+        except Exception as e:
+            console.print(f"\n[yellow]Warning: Could not check for existing final submissions: {str(e)}[/yellow]")
 
     # Read submission
     df = read_submission(file_path)
@@ -229,6 +242,7 @@ def submit(
     submission_name: Annotated[Optional[str], typer.Option(help="Optional user friendly name of the submission ")] = None,
     weight_class: Annotated[Optional[WeightClass], typer.Option(help="Model weight class size (small: up to 30M, medium: up to 60M, or large: up to 120M). If provided this will update the current model weight class.")] = None,
     submit: Annotated[bool, typer.Option("--submit/--test",help="Upload submission (--submit) or test submission (--test). Default's to test submission.")] = False,
+    final_submission: Annotated[bool, typer.Option("--final", help="Upload a final evaluation prompt submission.")] = False,
 ):  # fmt: skip
     "Submit a file to the TinyStories hackathon."
     try:
@@ -242,13 +256,15 @@ def submit(
                 console.print(f"[yellow]    {i} seconds remaining...[/yellow]")
                 time.sleep(1)
 
-        if submit:
+        if final_submission:
+            hf_repo = "cluster-of-stars/TinyHackathon_FinalSubmissions"
+        elif submit:
             hf_repo = "cluster-of-stars/TinyStoriesHackathon_Submissions"
         else:
             hf_repo = "cluster-of-stars/TinyStoriesHackathon_Submissions_Test"
 
         console.print(f"\n[yellow]Uploading {'test' if not submit else ''} submission from {submission_path}...[/yellow]")
-        result = upload_submission(submission_path, submission_name, weight_class, hf_repo)
+        result = upload_submission(submission_path, submission_name, weight_class, hf_repo, final_submission)
         console.print(f"\n[green]{'Test submission' if not submit else 'Submission'} successful![/green]")
         console.print(f"\nUsername: [blue]{result['participant']}[/blue]")
         console.print(f"Timestamp: [blue]{result['timestamp']}[/blue]")
