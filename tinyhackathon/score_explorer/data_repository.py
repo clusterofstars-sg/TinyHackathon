@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 # Import necessary functions from scoring.py
-from tinyhackathon.scoring import ScoreCategory
+from tinyhackathon.scoring import ScoreCategory, generate_global_leaderboard, generate_weight_class_leaderboards
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -13,19 +13,44 @@ logger = logging.getLogger("data_repository")
 
 # Path configuration
 BASE_DIR = Path(__file__).parent.parent.parent
-DATA_DIR = BASE_DIR / "score_explorer_data"
+_default_data_dir = BASE_DIR / "score_explorer_data"
+DATA_DIR = _default_data_dir
+
+# These will be updated by app.py after DATA_DIR is set
 SUBMISSIONS_DIR = DATA_DIR / "downloaded_submissions"
 SCORES_DIR = DATA_DIR / "scores"
 SUBMISSIONS_SUBDIR = SUBMISSIONS_DIR / "submissions"
 SCORES_SUBDIR = SCORES_DIR / "submissions"
 
-# Ensure directories exist
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-SUBMISSIONS_DIR.mkdir(parents=True, exist_ok=True)
-SCORES_DIR.mkdir(parents=True, exist_ok=True)
+
+# Ensure directories exist function (will be called from app.py after DATA_DIR is set)
+def ensure_data_dirs_exist():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    SUBMISSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    SCORES_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # In-memory cache for loaded submission DataFrames
 submission_data_cache: Dict[tuple[str, str], pd.DataFrame] = {}
+_dynamic_leaderboards_cache: Optional[Dict[str, pd.DataFrame]] = None
+
+
+def clear_leaderboard_cache() -> None:
+    """Clear in-memory leaderboard cache."""
+    global _dynamic_leaderboards_cache
+    _dynamic_leaderboards_cache = None
+
+
+def get_dynamic_leaderboards() -> Dict[str, pd.DataFrame]:
+    """Generate global and weight-class leaderboards on the fly, cached."""
+    global _dynamic_leaderboards_cache
+    if _dynamic_leaderboards_cache is not None:
+        return _dynamic_leaderboards_cache
+    # Generate global leaderboard from scores directory
+    global_df = generate_global_leaderboard(base_dir=str(SCORES_DIR))
+    weight_dfs = generate_weight_class_leaderboards(global_df)
+    _dynamic_leaderboards_cache = {"global": global_df, **weight_dfs}
+    return _dynamic_leaderboards_cache
 
 
 def find_submission_csv(username: str, submission_id: str) -> Optional[Path]:
@@ -36,7 +61,7 @@ def find_submission_csv(username: str, submission_id: str) -> Optional[Path]:
         return direct_path
 
     # Try submissions subdirectory
-    subdir_path = SUBMISSIONS_SUBDIR / username / f"{submission_id}.csv"
+    subdir_path = SUBMISSIONS_DIR / "submissions" / username / f"{submission_id}.csv"
     if subdir_path.exists():
         return subdir_path
 
@@ -113,22 +138,22 @@ def list_submissions(username: str) -> List[str]:
         for d in subdir_path.iterdir():
             if d.is_dir():
                 submissions.add(d.name)
-    
+
     # Look in downloaded_submissions directory (all submissions)
     # Try direct path in downloaded_submissions
     submissions_path = SUBMISSIONS_DIR / username
     if submissions_path.exists() and submissions_path.is_dir():
         for f in submissions_path.iterdir():
-            if f.is_file() and f.suffix.lower() == '.csv':
+            if f.is_file() and f.suffix.lower() == ".csv":
                 # Extract submission ID from filename (remove .csv extension)
                 submission_id = f.stem
                 submissions.add(submission_id)
-    
+
     # Try submissions subdirectory in downloaded_submissions
     submissions_subdir_path = SUBMISSIONS_SUBDIR / username
     if submissions_subdir_path.exists() and submissions_subdir_path.is_dir():
         for f in submissions_subdir_path.iterdir():
-            if f.is_file() and f.suffix.lower() == '.csv':
+            if f.is_file() and f.suffix.lower() == ".csv":
                 # Extract submission ID from filename (remove .csv extension)
                 submission_id = f.stem
                 submissions.add(submission_id)
@@ -428,20 +453,8 @@ def read_leaderboard_file(filename: str) -> Optional[pd.DataFrame]:
 
 
 def get_all_leaderboards() -> Dict[str, pd.DataFrame]:
-    """Get all available leaderboard data."""
-    leaderboards = {}
-
-    # Look for leaderboard files in the data directory
-    leaderboard_files = list(DATA_DIR.glob("leaderboard_*.csv"))
-    logger.info("Found " + str(len(leaderboard_files)) + " leaderboard files")
-
-    for file in leaderboard_files:
-        name = file.stem.replace("leaderboard_", "")
-        df = read_leaderboard_file(file.name)
-        if df is not None:
-            leaderboards[name] = df
-
-    return leaderboards
+    """Generate leaderboards on the fly instead of reading static CSVs."""
+    return get_dynamic_leaderboards()
 
 
 def compute_user_stats() -> pd.DataFrame:
@@ -453,11 +466,11 @@ def compute_user_stats() -> pd.DataFrame:
         # Get all submissions for the user
         submissions = list_submissions(username)
         submission_count = len(submissions)
-        
+
         # Count scored and unscored submissions
         scored_submissions = []
         unscored_submissions = []
-        
+
         for submission_id in submissions:
             # Check if this submission has score files
             score_dir = find_score_directory(username, submission_id)
@@ -468,18 +481,18 @@ def compute_user_stats() -> pd.DataFrame:
                 submission_csv = find_submission_csv(username, submission_id)
                 if submission_csv:
                     unscored_submissions.append(submission_id)
-        
+
         scored_count = len(scored_submissions)
         unscored_count = len(unscored_submissions)
 
         # Find the best submission by score
         best_submission = None
         best_score = None
-        
+
         # First try to find best score from global leaderboard
         leaderboards = get_all_leaderboards()
         global_leaderboard = leaderboards.get("global")
-        
+
         if global_leaderboard is not None and "username" in global_leaderboard.columns:
             user_rows = global_leaderboard[global_leaderboard["username"] == username]
             if not user_rows.empty and "score" in user_rows.columns:
@@ -488,7 +501,7 @@ def compute_user_stats() -> pd.DataFrame:
                 best_score = best_row["score"]
                 if "submission" in best_row:
                     best_submission = best_row["submission"]
-        
+
         # If not found in leaderboard or missing submission ID, check each submission
         if best_score is None or best_submission is None:
             for submission_id in scored_submissions:
@@ -502,14 +515,16 @@ def compute_user_stats() -> pd.DataFrame:
                             best_score = submission_score
                             best_submission = submission_id
 
-        user_stats.append({
-            "username": username, 
-            "submission_count": submission_count,
-            "scored_count": scored_count,
-            "unscored_count": unscored_count,
-            "best_submission": best_submission, 
-            "best_score": best_score
-        })
+        user_stats.append(
+            {
+                "username": username,
+                "submission_count": submission_count,
+                "scored_count": scored_count,
+                "unscored_count": unscored_count,
+                "best_submission": best_submission,
+                "best_score": best_score,
+            }
+        )
 
     return pd.DataFrame(user_stats)
 

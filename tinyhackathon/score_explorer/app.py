@@ -9,6 +9,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from huggingface_hub import HfApi
 
+import typer
+import uvicorn
+
 # Import data repository functions
 from tinyhackathon.score_explorer.data_repository import (
     check_data_directory_structure,
@@ -21,9 +24,10 @@ from tinyhackathon.score_explorer.data_repository import (
     list_users,
     apply_search,
     calculate_dataframe_averages,
-    read_leaderboard_file,
     find_score_directory,
     find_submission_csv,
+    submission_data_cache,
+    clear_leaderboard_cache,
     DATA_DIR,
     SUBMISSIONS_DIR,
     SCORES_DIR,
@@ -56,6 +60,11 @@ app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), na
 
 # Check if the data directories have a valid structure for browsing
 check_data_directory_structure()
+
+
+cli = typer.Typer()
+DEFAULT_SUBMISSIONS_DATASET: Optional[str] = None
+DEFAULT_SCORES_DATASET: Optional[str] = None
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -116,20 +125,36 @@ async def home(request: Request):
 
 
 @app.get("/download", response_class=HTMLResponse)
-async def download_data(request: Request, refresh: bool = False):
+async def download_data(
+    request: Request,
+    refresh: bool = False,
+    submissions_dataset: Optional[str] = None,
+    scores_dataset: Optional[str] = None,
+):
     """Download or refresh submission and scoring data"""
     try:
+        # fallback to CLI defaults
+        submissions_dataset = submissions_dataset or DEFAULT_SUBMISSIONS_DATASET
+        scores_dataset = scores_dataset or DEFAULT_SCORES_DATASET
         # Create environment config (non-test mode)
         env_config = EnvConfig(is_test_mode=False)
+        # override repos from CLI flags
+        if submissions_dataset:
+            env_config.submissions_repo_id = submissions_dataset
+        if scores_dataset:
+            env_config.scores_repo_id = scores_dataset
 
-        # Set up API client - will use API token from env if available
-        api_client = setup_api_client(env_config)
+        # Set up API client - will use API token if uploads are enabled
+        api_client = setup_api_client(upload=True)
 
         # Check if running with API client
         has_token = api_client is not None
 
-        # Download leaderboard files
-        leaderboard_results = download_leaderboards(env_config, api_client, force_refresh=refresh)
+        # Clear dynamic caches if refreshing and skip static leaderboard downloads
+        if refresh:
+            clear_leaderboard_cache()
+            submission_data_cache.clear()
+        leaderboard_results = {}
 
         # Process submissions separately
         results = {}
@@ -143,7 +168,11 @@ async def download_data(request: Request, refresh: bool = False):
             # Download submissions and scores
             try:
                 submission_results = download_submissions_and_scores(
-                    env_config=env_config, submission_dir=submission_dir, scores_dir=scores_dir, api_client=api_client
+                    submission_dir=submission_dir,
+                    scores_dir=scores_dir,
+                    submissions_repo_id=env_config.submissions_repo_id,
+                    scores_repo_id=env_config.scores_repo_id,
+                    api_client=api_client,
                 )
                 results.update(submission_results)
             except Exception as e:
@@ -567,11 +596,11 @@ async def compare_scores(request: Request, username: str, submission_id: str, it
 async def view_leaderboard(request: Request, board_type: str):
     """View a specific leaderboard"""
     try:
-        # Use repository to get leaderboard data
-        leaderboard_df = read_leaderboard_file(f"leaderboard_{board_type}.csv")
-
-        if leaderboard_df is None:
+        # Get dynamic leaderboard data
+        leaderboards = get_all_leaderboards()
+        if board_type not in leaderboards:
             return templates.TemplateResponse("error.html", {"request": request, "message": f"Leaderboard {board_type} not found"})
+        leaderboard_df = leaderboards[board_type]
 
         # Add is_partially_scored flag to each row
         leaderboard_data = []
@@ -601,11 +630,7 @@ async def view_leaderboard(request: Request, board_type: str):
             leaderboard_data.append(row_dict)
 
         # Rename columns for better display in UI
-        column_mapping = {
-            "submission_count": "Submissions",
-            "submission_date": "Date",
-            "weight_class": "Class"
-        }
+        column_mapping = {"submission_count": "Submissions", "submission_date": "Date", "weight_class": "Class"}
 
         # Apply column renames if needed
         for old_name, new_name in column_mapping.items():
@@ -675,11 +700,7 @@ async def view_all_leaderboards(request: Request):
             leaderboard_data[board_name] = {"data": processed_data, "columns": list(df.columns) + ["is_partially_scored"]}
 
             # Rename columns for better display in UI
-            column_mapping = {
-                "submission_count": "Submissions",
-                "submission_date": "Date",
-                "weight_class": "Class"
-            }
+            column_mapping = {"submission_count": "Submissions", "submission_date": "Date", "weight_class": "Class"}
 
             # Apply column renames if needed
             for old_name, new_name in column_mapping.items():
@@ -744,3 +765,21 @@ def download_leaderboards(env_config: EnvConfig, api_client: Optional[HfApi] = N
     except Exception as e:
         logger.exception("Error in download_leaderboards: " + str(e))
         return {"leaderboards": {"status": "error", "message": str(e)}}
+
+
+@cli.command("serve")
+def serve(
+    submissions_dataset: Optional[str] = typer.Option(None, "--submissions-dataset", help="HF repo for submissions"),
+    scores_dataset: Optional[str] = typer.Option(None, "--scores-dataset", help="HF repo for scores"),
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    reload: bool = True,
+):
+    global DEFAULT_SUBMISSIONS_DATASET, DEFAULT_SCORES_DATASET
+    DEFAULT_SUBMISSIONS_DATASET = submissions_dataset
+    DEFAULT_SCORES_DATASET = scores_dataset
+    uvicorn.run("tinyhackathon.score_explorer.app:app", host=host, port=port, reload=reload)
+
+
+if __name__ == "__main__":
+    cli()
