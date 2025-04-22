@@ -16,7 +16,7 @@ from rich.console import Console
 from rich.table import Table
 
 # Import from submission.py for authentication
-from submission import get_hf_user
+from tinyhackathon.submission import get_hf_user
 
 console = Console()
 
@@ -205,9 +205,8 @@ def get_all_scored_submissions(base_dir: str = "submissions") -> Dict[str, Dict[
 
 
 def download_new_submissions(
-    dataset_id: str = "cluster-of-stars/TinyStoriesHackathon_Submissions",
+    dataset_id: str,
     output_dir: Union[str, Path] = "downloaded_submissions",
-    is_test_mode: bool = False,
 ) -> List[Dict[str, Any]]:
     """Download all new submissions from HF dataset.
 
@@ -227,7 +226,7 @@ def download_new_submissions(
     output_dir.mkdir(exist_ok=True, parents=True)
 
     # Create tracking file for processed submissions
-    processed_filename = "processed_test.json" if is_test_mode else "processed.json"
+    processed_filename = "processed.json"
     processed_file = output_dir / processed_filename
     if processed_file.exists():
         processed = set(json.loads(processed_file.read_text()))
@@ -1010,7 +1009,7 @@ def save_global_leaderboard(leaderboard: pd.DataFrame, base_dir: str = "leaderbo
 
     Args:
         leaderboard: DataFrame containing the global leaderboard
-        base_dir: Base directory to save the leaderboard files
+        base_dir: Directory to save the leaderboard files
 
     Returns:
         Dictionary with paths to the saved files
@@ -1667,9 +1666,8 @@ def display_leaderboard_preview(leaderboard_df: pd.DataFrame):
 
 
 def download_existing_scores(
-    repo_id: str = "cluster-of-stars/TinyStoriesHackathon_Scores",
-    base_dir: str = "submissions",
-    is_test_mode: bool = False,
+    repo_id: str,
+    base_dir: str,
 ) -> Dict[str, int]:
     """Download all previously scored submissions from the HF repository.
 
@@ -1678,7 +1676,6 @@ def download_existing_scores(
     Args:
         repo_id: Hugging Face repo ID
         base_dir: Base directory to save scores
-        is_test_mode: Whether to use test mode
 
     Returns:
         Dictionary with counts of downloaded files
@@ -1766,7 +1763,7 @@ def download_existing_scores(
         # Download the file
         local_path = user_dir / "metadata.json"
         try:
-            if not local_path.exists() or is_test_mode:
+            if not local_path.exists():
                 _ = api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=file_path, local_dir=Path(base_dir))
                 results["downloaded"] += 1
                 console.print(f"[green]Downloaded metadata for {username}[/green]")
@@ -1814,7 +1811,7 @@ def download_existing_scores(
         local_history_path = Path(base_dir) / "submissions" / username / "score_history.csv"
 
         if history_path in files:
-            if not local_history_path.exists() or is_test_mode:  # Always download in test mode for testing
+            if not local_history_path.exists():
                 try:
                     _ = api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=history_path, local_dir=Path(base_dir))
                     results["downloaded"] += 1
@@ -1832,7 +1829,7 @@ def download_existing_scores(
         local_path = Path(file_path)  # Relative path from workspace root
         local_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            if not local_path.exists() or is_test_mode:  # Always download in test mode
+            if not local_path.exists():
                 _ = api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=file_path)
                 results["downloaded"] += 1
             else:
@@ -1902,34 +1899,29 @@ class EnvConfig:
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, pretty_exceptions_show_locals=False)
 
 
-def setup_environment(
-    mode: bool, sub_test: Optional[bool], score_test: Optional[bool], model_dir: Optional[Path], model_dirs: Optional[List[Path]]
-) -> Tuple[EnvConfig, List[Path], List[str]]:
+def validate_environment(
+    model_dir: Optional[Path],
+    model_dirs: Optional[List[Path]],
+    submissions_repo_id: Optional[str],
+    scores_repo_id: Optional[str],
+    local_mode: bool,
+) -> Tuple[List[Path], List[str]]:
     """Set up the environment configuration and model directories.
 
     This function handles the environment configuration setup, model directory
     validation, and model name extraction.
 
     Args:
-        mode: True for production mode (--submit), False for test mode (--test)
-        sub_test: Override for submission repository test mode
-        score_test: Override for scores repository test mode
         model_dir: Single model directory (deprecated)
         model_dirs: List of model directories to use
+        submissions_repo_id: Repository ID for submissions
+        scores_repo_id: Repository ID for scores
 
     Returns:
         Tuple containing:
-        - EnvConfig: The environment configuration
         - List[Path]: List of model directories to use
         - List[str]: List of model names (derived from directory names)
     """
-    # Create environment configuration
-    is_test_mode = not mode  # False = test, True = submit
-    env_config = EnvConfig(is_test_mode=is_test_mode, sub_test_override=sub_test, score_test_override=score_test)
-
-    # Print environment status
-    console.print(f"[bold {'yellow' if is_test_mode else 'green'}]{env_config}[/bold {'yellow' if is_test_mode else 'green'}]")
-
     # Handle backward compatibility for model_dir vs model_dirs
     if model_dirs is None:
         if model_dir is None:
@@ -1944,7 +1936,19 @@ def setup_environment(
     model_names = [Path(d).name for d in model_dirs]
     console.print(f"[blue]Using {len(model_names)} judging models: {', '.join(model_names)}[/blue]")
 
-    return env_config, model_dirs, model_names
+    # Validate local mode
+    if local_mode:
+        console.print("[yellow]Running in local mode, will not attempt to download submissions or scores, or upload results to HF[/yellow]")
+    else:
+        # Validate submissions repository ID
+        if submissions_repo_id is None:
+            console.print("[red]Error: Submissions repository ID must be provided via --submissions-repo-id[/red]")
+            raise ValueError("No submissions repository ID provided")
+        # Validate scores repository ID
+        if scores_repo_id is None:
+            console.print("[red]Error: Scores repository ID must be provided via --scores-repo-id. No scores will be uploaded.[/red]")
+
+    return model_dirs, model_names
 
 
 def setup_api_client(upload: bool) -> Optional[HfApi]:
@@ -1971,7 +1975,7 @@ def setup_api_client(upload: bool) -> Optional[HfApi]:
 
 
 def download_submissions_and_scores(
-    env_config: EnvConfig, submission_dir: str, scores_dir: str, api_client: Optional[HfApi] = None
+    submission_dir: str, scores_dir: str, submissions_repo_id: str, scores_repo_id: str, api_client: Optional[HfApi] = None
 ) -> Dict[str, Any]:
     """Download new submissions and existing scores.
 
@@ -1979,7 +1983,6 @@ def download_submissions_and_scores(
     and existing scores from the scores repository.
 
     Args:
-        env_config: Environment configuration
         submission_dir: Directory to save downloaded submissions
         scores_dir: Directory to save scores
         api_client: Optional authenticated API client (required for downloading scores)
@@ -1987,36 +1990,32 @@ def download_submissions_and_scores(
     Returns:
         Dictionary containing information about downloaded submissions and scores
     """
-    result = {"new_submissions": [], "scores_downloaded": False, "submission_dir": submission_dir, "scores_dir": scores_dir}
-
     # Create necessary directories
     Path(submission_dir).mkdir(exist_ok=True, parents=True)
     Path(scores_dir).mkdir(exist_ok=True, parents=True)
 
     # Download new submissions
-    console.print(f"[yellow]Downloading new submissions from {env_config.submissions_repo_id}...[/yellow]")
+    console.print(f"[yellow]Downloading new submissions from {submissions_repo_id}...[/yellow]")
     try:
-        new_submissions = download_new_submissions(
-            dataset_id=env_config.submissions_repo_id, output_dir=submission_dir, is_test_mode=env_config.use_test_sub
-        )
+        new_submissions = download_new_submissions(dataset_id=submissions_repo_id, output_dir=submission_dir)
 
         if new_submissions:
             console.print(f"[green]Downloaded {len(new_submissions)} new submissions[/green]")
-            result["new_submissions"] = new_submissions
+            result = {"new_submissions": new_submissions}
         else:
             console.print("[yellow]No new submissions to download[/yellow]")
+            result = {"new_submissions": []}
     except Exception as e:
         console.print(f"[red]Error downloading new submissions: {e}[/red]")
         # Continue with existing submissions if download fails
+        result = {"new_submissions": []}
 
     try:
         # Initial download of existing scores to:
         # 1. Avoid duplicate work by having local copies of already scored submissions
         # 2. Ensure we have the most current state before determining which submissions need scoring
         # 3. This is especially important in collaborative environments where multiple scorers may be working
-        download_stats = download_existing_scores(
-            repo_id=env_config.scores_repo_id, base_dir=scores_dir, is_test_mode=env_config.use_test_score
-        )
+        download_stats = download_existing_scores(repo_id=scores_repo_id, base_dir=scores_dir)
 
         result["scores_downloaded"] = True
         result["download_stats"] = download_stats
@@ -2519,6 +2518,8 @@ def upload_results(
 def score(
     model_dir: Annotated[Optional[Path], typer.Option(help="Directory containing the model files (deprecated, use model_dirs)")] = None,
     model_dirs: Annotated[Optional[List[Path]], typer.Option(help="List of directories containing the model files to use as judges")] = None,
+    submissions_repo_id: Annotated[Optional[str], typer.Option(help="Repository ID for submissions")] = None,
+    scores_repo_id: Annotated[Optional[str], typer.Option(help="Repository ID for scores")] = None,
     submissions_dir: Annotated[Optional[Path], typer.Option(help="Directory containing submissions")] = None,
     scores_dir: Annotated[Optional[Path], typer.Option(help="Directory to save scoring results")] = None,
     max_new_tokens: Annotated[int, typer.Option(help="Maximum tokens to generate")] = 1024,
@@ -2529,12 +2530,10 @@ def score(
     upload: Annotated[bool, typer.Option(help="Upload results to HF repo")] = False,
     prompt_file: Annotated[str, typer.Option(help="Path to prompt file")] = "prompts/simple_prompt.yaml",
     reasoning_template: Annotated[Optional[str], typer.Option(help="Path to reasoning template YAML file for deep reasoning models")] = None,
-    mode: Annotated[bool, typer.Option("--submit/--test", help="Submit to production (--submit) or test environment (--test). Defaults to test mode.")] = False,
-    sub_test: Annotated[Optional[bool], typer.Option("--sub-test/--sub-prod", help="Override submission repository selection (test or prod). If not specified, follows the main mode.")] = None,
-    score_test: Annotated[Optional[bool], typer.Option("--score-test/--score-prod", help="Override score repository selection (test or prod). If not specified, follows the main mode.")] = None,
-    test_samples: Annotated[Optional[int], typer.Option(help="Number of test samples to score")] = None,
+    test_samples: Annotated[Optional[int], typer.Option(help="Number of samples to score. If not specified, will score all samples.")] = None,
     draft_model_dir: Annotated[Optional[Path], typer.Option(help="Directory for draft model (speculative decoding)")] = None,
     draft_cache_size: Annotated[Optional[Path], typer.Option(help="Cache size for draft model")] = None,
+    local_mode: Annotated[bool, typer.Option("--local", help="Run in local mode, will not attempt to download submissions or scores, or upload results to HF")] = False,
     config: Annotated[Optional[Path], typer.Option(callback=conf_callback, is_eager=True, help="Relative path to YAML config file for setting options. Passing CLI options will supersede config options.", case_sensitive=False)] = None,
 ):  # fmt: skip
     """Run the scoring process using a refactored approach with better separation of concerns.
@@ -2565,29 +2564,35 @@ def score(
     """
     try:
         # Step 1: Set up environment
-        env_config, model_dirs, model_names = setup_environment(
-            mode=mode, sub_test=sub_test, score_test=score_test, model_dir=model_dir, model_dirs=model_dirs
+        model_dirs, model_names = validate_environment(
+            model_dir=model_dir,
+            model_dirs=model_dirs,
+            submissions_repo_id=submissions_repo_id,
+            scores_repo_id=scores_repo_id,
+            local_mode=local_mode,
         )
 
         # Step 2: Set up API client for uploads
-        api_client = setup_api_client(upload=upload)
+        if not local_mode:
+            api_client = setup_api_client(upload=upload)
+        else:
+            api_client = None
 
         # Set final upload flag based on API client availability
-        can_upload = upload and api_client is not None
-
-        # Set up input and output directories
-        submission_dir = submissions_dir or env_config.submission_dir
-        scores_dir_path = scores_dir or env_config.scores_dir
+        can_upload = upload and api_client is not None and scores_repo_id is not None
 
         # Step 3: Download submissions and scores
-        download_result = download_submissions_and_scores(
-            env_config=env_config, submission_dir=submission_dir, scores_dir=scores_dir_path, api_client=api_client if can_upload else None
-        )
+        if not local_mode:
+            download_result = download_submissions_and_scores(
+                submission_dir=submissions_dir,
+                scores_dir=scores_dir,
+                api_client=api_client if can_upload else None,
+                submissions_repo_id=submissions_repo_id,
+                scores_repo_id=scores_repo_id,
+            )
 
         # Step 4: Find unscored submissions
-        unscored_files_by_model = find_unscored_submissions(
-            submission_dir=submission_dir, scores_dir=scores_dir_path, model_names=model_names
-        )
+        unscored_files_by_model = find_unscored_submissions(submission_dir=submissions_dir, scores_dir=scores_dir, model_names=model_names)
 
         # Check if there's anything to score
         total_unscored = sum(len(files) for files in unscored_files_by_model.values())
@@ -2600,7 +2605,7 @@ def score(
             unscored_files_by_model=unscored_files_by_model,
             model_dirs=model_dirs,
             model_names=model_names,
-            scores_dir=scores_dir_path,
+            scores_dir=scores_dir,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_p=top_p,
@@ -2621,18 +2626,18 @@ def score(
         # Step 6: Generate summaries and update history for scored submissions
         summary_results = generate_summaries_and_history(
             scored_submissions=successfully_scored_submissions,
-            scores_dir=scores_dir_path,
+            scores_dir=scores_dir,
             overwrite=True,
-            repo_id=env_config.scores_repo_id if can_upload else None,
+            repo_id=scores_repo_id if can_upload else None,
         )
 
         # Step 7: Generate and optionally upload leaderboards
         leaderboard_results = generate_and_upload_leaderboards(
-            scores_dir=scores_dir_path,
+            scores_dir=scores_dir,
             leaderboard_dir="leaderboards",
             upload=can_upload,
             api_client=api_client,
-            repo_id=env_config.scores_repo_id,
+            repo_id=scores_repo_id,
             update_readme=can_upload,
             force_readme_update=False,
         )
@@ -2642,16 +2647,20 @@ def score(
         if can_upload and successfully_scored_submissions:
             upload_stats = upload_results(
                 scored_submissions=successfully_scored_submissions,
-                scores_dir=scores_dir_path,
-                repo_id=env_config.scores_repo_id,
+                scores_dir=scores_dir,
+                repo_id=scores_repo_id,
                 api_client=api_client,
             )
 
         # Print summary of results
         console.print("\n[bold blue]===== Scoring Process Complete =====[/bold blue]")
-        console.print(f"[blue]Environment: {'Production' if mode else 'Test'}[/blue]")
-        console.print(f"[blue]Submissions Repository: {env_config.submissions_repo_id}[/blue]")
-        console.print(f"[blue]Scores Repository: {env_config.scores_repo_id}[/blue]")
+        if local_mode:
+            console.print("[blue]Local mode[/blue]")
+            console.print(f"[blue]Submissions Directory: {submissions_dir}[/blue]")
+            console.print(f"[blue]Scores Directory: {scores_dir}[/blue]")
+        else:
+            console.print(f"[blue]Submissions Repository: {submissions_repo_id}[/blue]")
+            console.print(f"[blue]Scores Repository: {scores_repo_id}[/blue]")
         console.print(f"[blue]Models used: {', '.join(model_names)}[/blue]")
         console.print(f"[blue]Total submissions scored: {len(successfully_scored_submissions)}[/blue]")
         console.print(f"[blue]Generated {len(summary_results['summary_files'])} summary files[/blue]")
@@ -2711,127 +2720,6 @@ def cleanup(
                 console.print(f"[red]Not a directory - {path}[/red]")
         else:
             console.print(f"[yellow]Skipping {path} - not found[/yellow]")
-
-
-@app.command()
-def regenerate(
-    submissions_dir: Annotated[Optional[Path], typer.Option(help="Directory containing submissions")] = None,
-    scores_dir: Annotated[Optional[Path], typer.Option(help="Directory to save scoring results")] = None,
-    upload: Annotated[bool, typer.Option(help="Upload results to HF repo")] = False,
-    mode: Annotated[bool, typer.Option("--submit/--test", help="Submit to production (--submit) or test environment (--test). Defaults to test mode.")] = False,
-    sub_test: Annotated[Optional[bool], typer.Option("--sub-test/--sub-prod", help="Override submission repository selection (test or prod). If not specified, follows the main mode.")] = None,
-    score_test: Annotated[Optional[bool], typer.Option("--score-test/--score-prod", help="Override score repository selection (test or prod). If not specified, follows the main mode.")] = None,
-    config: Annotated[Optional[Path], typer.Option(callback=conf_callback, is_eager=True, help="Relative path to YAML config file for setting options. Passing CLI options will supersede config options.", case_sensitive=False)] = None,
-):  # fmt: skip
-    """Regenerate submission summaries, score history, and leaderboards from existing score CSVs.
-
-    This command downloads the current score CSVs, recalculates all summaries and leaderboards,
-    and optionally uploads the updated files without performing any new scoring.
-
-    Parameters:
-        submissions_dir: Directory containing submissions
-        scores_dir: Directory to save scoring results
-        upload: Whether to upload results to Hugging Face
-        mode: Submit to production or test environment
-        sub_test/sub_prod: Override submission repository selection
-        score_test/score_prod: Override score repository selection
-        config: Path to configuration file for setting options
-    """
-    try:
-        # Step 1: Set up environment (with empty model_dirs since we're not scoring)
-        env_config, _, _ = setup_environment(mode=mode, sub_test=sub_test, score_test=score_test, model_dir="fake", model_dirs=None)
-
-        # Step 2: Set up API client for uploads
-        api_client = setup_api_client(upload=upload)
-
-        # Set final upload flag based on API client availability
-        can_upload = upload and api_client is not None
-
-        # Set up input and output directories
-        submission_dir = submissions_dir or env_config.submission_dir
-        scores_dir_path = scores_dir or env_config.scores_dir
-
-        # Step 3: Download submissions and scores
-        download_result = download_submissions_and_scores(
-            env_config=env_config, submission_dir=submission_dir, scores_dir=scores_dir_path, api_client=api_client if can_upload else None
-        )
-
-        # Step 4: Find all scored submissions
-        console.print("[bold blue]Finding all scored submissions...[/bold blue]")
-        scored_submissions = set()
-        all_submissions = get_all_scored_submissions(base_dir=scores_dir_path)
-
-        for username, submissions in all_submissions["scored_submissions"].items():
-            for submission_id in submissions:
-                scored_submissions.add((username, submission_id))
-
-        if not scored_submissions:
-            console.print("[yellow]No scored submissions found. Exiting.[/yellow]")
-            return
-
-        console.print(f"[green]Found {len(scored_submissions)} scored submissions.[/green]")
-
-        # Step 5: Generate summaries and update history for all submissions
-        console.print("[bold blue]Regenerating summaries and history files...[/bold blue]")
-        summary_results = generate_summaries_and_history(
-            scored_submissions=scored_submissions,
-            scores_dir=scores_dir_path,
-            overwrite=True,
-            repo_id=env_config.scores_repo_id if can_upload else None,
-        )
-
-        # Step 6: Generate and optionally upload leaderboards
-        console.print("[bold blue]Regenerating leaderboards...[/bold blue]")
-        leaderboard_results = generate_and_upload_leaderboards(
-            scores_dir=scores_dir_path,
-            leaderboard_dir="leaderboards",
-            upload=can_upload,
-            api_client=api_client,
-            repo_id=env_config.scores_repo_id,
-            update_readme=can_upload,
-            force_readme_update=True,  # Force README update since we're regenerating everything
-        )
-
-        # Step 7: Upload user score files if requested
-        upload_stats = {}
-        if can_upload and scored_submissions:
-            console.print("[bold blue]Uploading regenerated files...[/bold blue]")
-            upload_stats = upload_results(
-                scored_submissions=scored_submissions,
-                scores_dir=scores_dir_path,
-                repo_id=env_config.scores_repo_id,
-                api_client=api_client,
-            )
-
-        # Print summary of results
-        console.print("\n[bold blue]===== Regeneration Process Complete =====[/bold blue]")
-        console.print(f"[blue]Environment: {'Production' if mode else 'Test'}[/blue]")
-        console.print(f"[blue]Submissions Repository: {env_config.submissions_repo_id}[/blue]")
-        console.print(f"[blue]Scores Repository: {env_config.scores_repo_id}[/blue]")
-        console.print(f"[blue]Total submissions processed: {len(scored_submissions)}[/blue]")
-        console.print(f"[blue]Generated {len(summary_results['summary_files'])} summary files[/blue]")
-        console.print(f"[blue]Updated {len(summary_results['history_files'])} history files[/blue]")
-
-        if leaderboard_results.get("leaderboard") is not None:
-            weight_class_count = len(leaderboard_results.get("weight_class_leaderboards", {}))
-            console.print(f"[blue]Generated global leaderboard and {weight_class_count} weight class leaderboards[/blue]")
-
-            if can_upload:
-                upload_stats_lb = leaderboard_results.get("upload_stats", {})
-                console.print(f"[blue]Uploaded {upload_stats_lb.get('files', 0)} leaderboard files[/blue]")
-                if leaderboard_results.get("readme_updated", False):
-                    console.print("[blue]Updated repository README with latest leaderboards[/blue]")
-
-        if can_upload and upload_stats:
-            console.print(f"[blue]Uploaded {upload_stats.get('files', 0)} user score files[/blue]")
-
-        console.print("[green]Regeneration process completed successfully[/green]")
-
-    except Exception as e:
-        console.print(f"[red]Error in regeneration process: {e}[/red]")
-        import traceback
-
-        console.print(traceback.format_exc())
 
 
 if __name__ == "__main__":
