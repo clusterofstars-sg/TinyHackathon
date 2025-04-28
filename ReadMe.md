@@ -48,6 +48,8 @@ python submission.py submit --submission-path PATH_TO_FILE [--submission-name NA
 uv run submission.py submit --submission-path PATH_TO_FILE [--submission-name NAME] --submit
 ```
 
+where `submission-name` is an optional human-readable name for the submission.
+
 By default, the submission script will submit to the test dataset which will not be scored. For a realsubmission, use the `--submit` flag.
 
 Set `submission-name` to optionally give your submission a human-friendly identifier. If not set, it will only have a timestamp.
